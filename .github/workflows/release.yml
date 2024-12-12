@@ -22,6 +22,12 @@ jobs:
           target: ${{ matrix.target }}
           override: true
 
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+          cache-on-failure: true
+
       - name: Install cargo-bundle
         run: cargo install cargo-bundle
 
@@ -29,27 +35,24 @@ jobs:
         run: |
           cargo bundle --release --target ${{ matrix.target }}
 
-      - name: Create DMG
+      - name: Create ZIP
         run: |
           cd target/${{ matrix.target }}/release/bundle/osx
-          # Create a temporary directory for mounting
-          MOUNT_DIR=$(mktemp -d)
-          # Create DMG
-          hdiutil create -volname "Gomi" -srcfolder "Gomi.app" -ov -format UDZO "Gomi-${{ matrix.target }}.dmg"
+          zip -r "Gomi-${{ matrix.target }}.zip" Gomi.app
 
       - name: Upload Release
         uses: softprops/action-gh-release@v1
         if: startsWith(github.ref, 'refs/tags/')
         with:
           files: |
-            target/${{ matrix.target }}/release/bundle/osx/*.dmg
+            target/${{ matrix.target }}/release/bundle/osx/*.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
 
       - name: Generate Checksums
         run: |
           cd target/${{ matrix.target }}/release/bundle/osx
-          shasum -a 256 *.dmg > checksums.txt
+          shasum -a 256 *.zip > checksums.txt
 
       - name: Upload Checksums
         uses: softprops/action-gh-release@v1
