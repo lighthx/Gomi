@@ -1,0 +1,26 @@
+[package]
+name = "Gomi"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+cocoa = "0.26.0"
+iced = {git = "https://github.com/iced-rs/iced.git", features = ["tokio","image"]}
+core-foundation = "0.9.3"
+core-graphics = "0.23.1"
+objc = "0.2.7"
+libc = "0.2"
+serde_json = "1.0.133"
+tokio = { version = "1.36"}
+rusqlite = { version = "0.32.1", features = ["bundled"] }
+tracing = "0.1.41"
+tracing-subscriber = "0.3.19"
+tracing-appender = "0.2.3"
+url = "2.5.4"
+
+[package.metadata.bundle]
+name = "Gomi"
+identifier = "com.lighthx.gomi"
+icon = ["resources/icon.icns"]
+[package.metadata.bundle.mac]
+info_plist = "resources/Info.plist"
