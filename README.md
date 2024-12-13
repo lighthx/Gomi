@@ -15,6 +15,9 @@ A minimalist browser launcher for macOS that helps you manage multiple browsers 
 ```bash
 # Using Cargo
 git clone https://github.com/lighthx/gomi
+
+cargo install cargo-bundle
+
 cargo bundle --release
 
 # Or download from releases
