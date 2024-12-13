@@ -28,6 +28,26 @@ jobs:
           key: ${{ matrix.target }}
           cache-on-failure: true
 
+      - name: Install the Apple certificate
+        env:
+          BUILD_CERTIFICATE_BASE64: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
+          P12_PASSWORD: ${{ secrets.P12_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          CERTIFICATE_PATH=$RUNNER_TEMP/build_certificate.p12
+          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+
+          echo -n "$BUILD_CERTIFICATE_BASE64" | base64 --decode -o $CERTIFICATE_PATH
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+          security set-keychain-settings -lut 21600 $KEYCHAIN_PATH
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+
+          security import $CERTIFICATE_PATH -P "$P12_PASSWORD" -A -t cert -f pkcs12 -k $KEYCHAIN_PATH
+          security list-keychain -d user -s $KEYCHAIN_PATH
+          security default-keychain -s $KEYCHAIN_PATH
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+
       - name: Install cargo-bundle
         run: cargo install cargo-bundle
 
@@ -35,24 +55,94 @@ jobs:
         run: |
           cargo bundle --release --target ${{ matrix.target }}
 
-      - name: Create ZIP
+      - name: Sign and Notarize
+        env:
+          APPLE_DEVELOPER_ID: ${{ secrets.APPLE_DEVELOPER_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
         run: |
           cd target/${{ matrix.target }}/release/bundle/osx
-          zip -r "Gomi-${{ matrix.target }}.zip" Gomi.app
+          
+          codesign --remove-signature Gomi.app/Contents/MacOS/Gomi || true
+          codesign --remove-signature Gomi.app || true
+          
+          codesign --force --options runtime \
+            --sign "$APPLE_DEVELOPER_ID" \
+            --timestamp \
+            --keychain "$RUNNER_TEMP/app-signing.keychain-db" \
+            --entitlements $GITHUB_WORKSPACE/resources/entitlements.plist \
+            Gomi.app/Contents/MacOS/Gomi
+          
+          find Gomi.app/Contents/MacOS -type f -perm +111 -exec \
+            codesign --force --options runtime \
+              --sign "$APPLE_DEVELOPER_ID" \
+              --timestamp \
+              --keychain "$RUNNER_TEMP/app-signing.keychain-db" \
+              --entitlements $GITHUB_WORKSPACE/resources/entitlements.plist \
+              {} \;
+          
+          codesign --force --options runtime \
+            --entitlements $GITHUB_WORKSPACE/resources/entitlements.plist \
+            --sign "$APPLE_DEVELOPER_ID" \
+            --deep --strict \
+            --timestamp \
+            --keychain "$RUNNER_TEMP/app-signing.keychain-db" \
+            Gomi.app
+          
+          ditto -c -k --keepParent Gomi.app Gomi.zip
+          
+          NOTARIZATION_OUTPUT=$(xcrun notarytool submit Gomi.zip \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_APP_SPECIFIC_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait)
+          
+          SUBMISSION_ID=$(echo "$NOTARIZATION_OUTPUT" | grep "id:" | head -n1 | awk '{print $2}' | tr -d '[:space:]')
+          
+          if [ ! -z "$SUBMISSION_ID" ]; then
+            xcrun notarytool log \
+              --apple-id "$APPLE_ID" \
+              --password "$APPLE_APP_SPECIFIC_PASSWORD" \
+              --team-id "$APPLE_TEAM_ID" \
+              "$SUBMISSION_ID" notarization.log
+          else
+            exit 1
+          fi
+          
+          xcrun stapler staple Gomi.app
+
+      - name: Create DMG
+        env:
+          APPLE_DEVELOPER_ID: ${{ secrets.APPLE_DEVELOPER_ID }}
+        run: |
+          cd target/${{ matrix.target }}/release/bundle/osx
+          hdiutil create -volname "Gomi" -srcfolder "Gomi.app" -ov -format UDZO "Gomi-${{ matrix.target }}.dmg"
+          codesign --force \
+            --sign "$APPLE_DEVELOPER_ID" \
+            --timestamp \
+            --keychain "$RUNNER_TEMP/app-signing.keychain-db" \
+            "Gomi-${{ matrix.target }}.dmg"
 
       - name: Upload Release
         uses: softprops/action-gh-release@v1
         if: startsWith(github.ref, 'refs/tags/')
         with:
           files: |
-            target/${{ matrix.target }}/release/bundle/osx/*.zip
+            target/${{ matrix.target }}/release/bundle/osx/*.dmg
         env:
           GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
 
       - name: Generate Checksums
         run: |
           cd target/${{ matrix.target }}/release/bundle/osx
-          shasum -a 256 *.zip > checksums.txt
+          shasum -a 256 *.dmg > checksums.txt
+
+      - name: Clean up keychain and provisioning profile
+        if: ${{ always() }}
+        run: |
+          security delete-keychain $RUNNER_TEMP/app-signing.keychain-db
 
       - name: Upload Checksums
         uses: softprops/action-gh-release@v1
