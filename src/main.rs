@@ -20,7 +20,6 @@ use platform_tools::open_url;
 use std::mem;
 use std::time::{Duration, Instant};
 use storage::{BrowserInfo, BrowserProfile, MatchItem, Storage};
-use tracing::info;
 use tracing_subscriber::fmt::format::FmtSpan;
 use url::Url;
 
@@ -90,6 +89,7 @@ impl Gomi {
             },
             Task::perform(
                 async move {
+                    // hide_app_icon();
                     let mut storage = Storage::new();
                     let mut browsers = storage.get_browsers();
                     if browsers.is_empty() {
@@ -105,7 +105,6 @@ impl Gomi {
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
-        info!("message: {:?}", message);
         match message {
             Message::GoHome(browsers) => {
                 self.browser_list = Some(browsers);
@@ -148,17 +147,22 @@ impl Gomi {
 
             Message::ReceiveUrl(url) => {
                 let equal_matched = storage::Storage::new().find_equal_matches_by_url(url.clone());
+                self.current_url = Some(url.clone());
                 if let Some(match_item) = equal_matched {
-                    open_url(url.clone(), match_item.browser_path, match_item.profile);
-                    return Task::none();
+                    return Task::perform(
+                        async move { (match_item.browser_path, match_item.profile, None) },
+                        |v| Message::LaunchBrowser(v.0, v.1, v.2),
+                    );
                 }
                 let contain_matched =
                     storage::Storage::new().find_contain_matches_by_url(url.clone());
                 if let Some(match_item) = contain_matched {
-                    open_url(url.clone(), match_item.browser_path, match_item.profile);
-                    return Task::none();
+                    return Task::perform(
+                        async move { (match_item.browser_path, match_item.profile, None) },
+                        |v| Message::LaunchBrowser(v.0, v.1, v.2),
+                    );
                 }
-                self.current_url = Some(url);
+
                 Task::batch(vec![
                     window::get_latest()
                         .and_then(move |w| window::move_to(w, get_mouse_position())),
@@ -558,10 +562,11 @@ fn main() -> iced::Result {
         .with_writer(non_blocking)
         .with_span_events(FmtSpan::CLOSE)
         .init();
+
     iced::application("Gomi", Gomi::update, Gomi::view)
         .window(window::Settings {
             position: Position::Specific(get_mouse_position()),
-            decorations: false,
+            // decorations: false,
             transparent: true,
             resizable: false,
             ..Default::default()
