@@ -1,5 +1,4 @@
 use rusqlite::Connection;
-use tracing::info;
 
 use crate::config::get_db_path;
 

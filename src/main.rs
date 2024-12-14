@@ -9,14 +9,14 @@ use components::scroll_view::scroll_view;
 use config::{LOG_DIR, LOG_FILE, WINDOW_HEIGHT, WINDOW_WIDTH};
 use iced::keyboard::Modifiers;
 use iced::widget::{text_editor, text_input, tooltip};
-use iced::window::{Mode, Position};
+use iced::window::Position;
 use iced::{event, keyboard, Alignment, Event, Font, Subscription};
 use iced::{
     widget::{button, center, container, image, row, text, Column, Text},
     window, Background, Border, Color, Element, Length, Shadow, Size, Task, Theme,
 };
 use platform_tools::{ensure_default_browser, get_mouse_position};
-use platform_tools::{hide_app_icon, open_url};
+use platform_tools::open_url;
 use std::mem;
 use std::time::{Duration, Instant};
 use storage::{BrowserInfo, BrowserProfile, MatchItem, Storage};

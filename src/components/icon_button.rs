@@ -1,6 +1,6 @@
 use iced::{
     widget::{button, center, Button},
-    Background, Border, Color, Element, Shadow,
+    Background, Border, Color, Shadow,
 };
 
 use super::icons::{add_icon, back_icon, profile_icon, remove_icon};
