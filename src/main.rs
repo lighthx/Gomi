@@ -15,11 +15,12 @@ use iced::{
     widget::{button, center, container, image, row, text, Column, Text},
     window, Background, Border, Color, Element, Length, Shadow, Size, Task, Theme,
 };
-use platform_tools::get_mouse_position;
-use platform_tools::open_url;
+use platform_tools::{ensure_default_browser, get_mouse_position};
+use platform_tools::{hide_app_icon, open_url};
 use std::mem;
 use std::time::{Duration, Instant};
 use storage::{BrowserInfo, BrowserProfile, MatchItem, Storage};
+use tracing::info;
 use tracing_subscriber::fmt::format::FmtSpan;
 use url::Url;
 
@@ -32,6 +33,7 @@ struct Gomi {
     keyboard: Modifiers,
     launch_time: Instant,
     stacks: Vec<Page>,
+    current_window: Option<window::Id>,
 }
 #[derive(Debug)]
 enum Page {
@@ -66,10 +68,13 @@ enum Message {
     Back,
     AddProfile,
     TypeProfileText(String),
-    WindowUnfocused,
     ShowMatchContainEditor(String, Option<String>),
     TypeMatchContainText(text_editor::Action),
     KeyboardModifiersChanged(Modifiers),
+    OpenWindow,
+    WindowOpened(window::Id),
+    CloseWindow,
+    MoveWindow(window::Id),
 }
 
 impl Gomi {
@@ -86,10 +91,10 @@ impl Gomi {
                 keyboard: Modifiers::default(),
                 launch_time: Instant::now(),
                 stacks: vec![],
+                current_window: None,
             },
             Task::perform(
                 async move {
-                    // hide_app_icon();
                     let mut storage = Storage::new();
                     let mut browsers = storage.get_browsers();
                     if browsers.is_empty() {
@@ -108,6 +113,9 @@ impl Gomi {
         match message {
             Message::GoHome(browsers) => {
                 self.browser_list = Some(browsers);
+                if !ensure_default_browser() {
+                    return Task::done(Message::OpenWindow);
+                }
                 Task::none()
             }
             Message::LaunchBrowser(path, profile, external_operation) => {
@@ -139,45 +147,47 @@ impl Gomi {
                             }
                         }
                     }
-                    return window::get_latest()
-                        .and_then(move |w| window::change_mode(w, Mode::Hidden));
+                    return Task::done(Message::CloseWindow);
                 }
                 Task::none()
             }
 
             Message::ReceiveUrl(url) => {
-                let equal_matched = storage::Storage::new().find_equal_matches_by_url(url.clone());
                 self.current_url = Some(url.clone());
+                let equal_matched = self.storage.find_equal_matches_by_url(url.clone());
                 if let Some(match_item) = equal_matched {
-                    return Task::perform(
-                        async move { (match_item.browser_path, match_item.profile, None) },
-                        |v| Message::LaunchBrowser(v.0, v.1, v.2),
-                    );
+                    return Task::done(Message::LaunchBrowser(
+                        match_item.browser_path,
+                        match_item.profile,
+                        None,
+                    ));
                 }
-                let contain_matched =
-                    storage::Storage::new().find_contain_matches_by_url(url.clone());
+                let contain_matched = self.storage.find_contain_matches_by_url(url.clone());
                 if let Some(match_item) = contain_matched {
-                    return Task::perform(
-                        async move { (match_item.browser_path, match_item.profile, None) },
-                        |v| Message::LaunchBrowser(v.0, v.1, v.2),
-                    );
+                    return Task::done(Message::LaunchBrowser(
+                        match_item.browser_path,
+                        match_item.profile,
+                        None,
+                    ));
                 }
-
-                Task::batch(vec![
-                    window::get_latest()
-                        .and_then(move |w| window::move_to(w, get_mouse_position())),
-                    window::get_latest().and_then(move |w| window::change_mode(w, Mode::Windowed)),
-                ])
+                if let Some(window_id) = self.current_window {
+                    return Task::done(Message::MoveWindow(window_id));
+                }
+                Task::done(Message::OpenWindow)
             }
+            Message::MoveWindow(window_id) => window::move_to(window_id, get_mouse_position()),
             Message::SetAsDefault => {
                 platform_tools::set_as_default_browser();
                 Task::none()
             }
             Message::CheckDefaultStatus => {
                 if !self.is_default_browser {
-                    self.is_default_browser = platform_tools::ensure_default_browser();
+                    let is_default_browser = platform_tools::ensure_default_browser();
+                    self.is_default_browser = is_default_browser;
+                    if is_default_browser {
+                        return Task::done(Message::CloseWindow);
+                    }
                 }
-
                 Task::none()
             }
             Message::ListProfiles(browser) => {
@@ -249,17 +259,6 @@ impl Gomi {
                 }
                 Task::none()
             }
-            Message::WindowUnfocused => {
-                if cfg!(debug_assertions) {
-                    Task::none()
-                } else if self.launch_time.elapsed() < Duration::from_secs(1) {
-                    Task::none()
-                } else {
-                    self.current_page = Page::Home;
-                    self.stacks.clear();
-                    window::get_latest().and_then(move |w| window::change_mode(w, Mode::Hidden))
-                }
-            }
             Message::ShowMatchContainEditor(browser_path, profile) => {
                 if let Some(url) = self.current_url.clone() {
                     let new_page = Page::MatchContainEditor {
@@ -286,10 +285,34 @@ impl Gomi {
                 self.keyboard = modifiers;
                 Task::none()
             }
+            Message::OpenWindow => {
+                let position = get_mouse_position();
+                let (_, open) = window::open(window::Settings {
+                    position: Position::Specific(position),
+                    size: Size::new(WINDOW_WIDTH, WINDOW_HEIGHT),
+                    ..Default::default()
+                });
+                open.map(Message::WindowOpened)
+            }
+            Message::WindowOpened(window_id) => {
+                self.current_window = Some(window_id);
+                Task::none()
+            }
+            Message::CloseWindow => {
+                if let Some(window_id) = self.current_window {
+                    let rs = window::close(window_id);
+                    self.current_page = Page::Home;
+                    self.stacks.clear();
+                    self.current_url = None;
+                    self.current_window = None;
+                    return rs;
+                }
+                Task::none()
+            }
         }
     }
 
-    fn view(&self) -> Element<Message> {
+    fn view(&self, _: window::Id) -> Element<Message> {
         let content = match &self.current_page {
             Page::Home => {
                 let browsers = self.browser_list.clone().unwrap_or_default();
@@ -382,6 +405,7 @@ impl Gomi {
 
                     let footer = if let Some(url) = current_url {
                         let url_cloned = url.clone();
+                        info!("url_cloned: {}", url_cloned);
                         let url = Url::parse(&url).unwrap();
                         let host = url.host_str().unwrap_or_default().to_string();
 
@@ -389,19 +413,21 @@ impl Gomi {
                             Text::new(host).size(13).style(|_| text::Style {
                                 color: Some(Color::from_rgb(0.2, 0.2, 0.2)),
                             }),
-                            container(Text::new(url_cloned).size(13))
-                                .padding(4)
-                                .style(|_| container::Style {
-                                    background: Some(Background::Color(Color::from_rgb(
-                                        0.9, 0.9, 1.0,
-                                    ))),
-                                    border: Border {
-                                        radius: 4.0.into(),
-                                        width: 1.0,
-                                        color: Color::from_rgb(0.7, 0.7, 0.9),
-                                    },
-                                    ..Default::default()
-                                }),
+                            container(
+                                Text::new(url_cloned)
+                                    .size(13)
+                                    .color(Color::from_rgb(0.2, 0.2, 0.2)),
+                            )
+                            .padding(4)
+                            .style(|_| container::Style {
+                                background: Some(Background::Color(Color::from_rgb(0.9, 0.9, 1.0))),
+                                border: Border {
+                                    radius: 4.0.into(),
+                                    width: 1.0,
+                                    color: Color::from_rgb(0.7, 0.7, 0.9),
+                                },
+                                ..Default::default()
+                            }),
                             tooltip::Position::Top,
                         ))
                         .padding([8, 12])
@@ -533,20 +559,19 @@ impl Gomi {
         content.into()
     }
 
-    fn theme(&self) -> Theme {
-        Theme::Light
+    fn theme(&self, window: window::Id) -> Theme {
+        Theme::default()
     }
+
     fn subscription(&self) -> Subscription<Message> {
         Subscription::batch([
             event::listen_url().map(Message::ReceiveUrl),
             iced::time::every(Duration::from_secs(1)).map(|_| Message::CheckDefaultStatus),
             event::listen_with(|event, _status, _window| -> Option<Message> {
                 match event {
-                    Event::Window(window::Event::Unfocused) => Some(Message::WindowUnfocused),
                     Event::Keyboard(keyboard::Event::ModifiersChanged(modifiers)) => {
                         Some(Message::KeyboardModifiersChanged(modifiers))
                     }
-
                     _ => None,
                 }
             }),
@@ -557,22 +582,13 @@ impl Gomi {
 fn main() -> iced::Result {
     let file_appender = tracing_appender::rolling::daily(LOG_DIR, LOG_FILE);
     let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
-
     tracing_subscriber::fmt()
         .with_writer(non_blocking)
         .with_span_events(FmtSpan::CLOSE)
         .init();
 
-    iced::application("Gomi", Gomi::update, Gomi::view)
-        .window(window::Settings {
-            position: Position::Specific(get_mouse_position()),
-            // decorations: false,
-            transparent: true,
-            resizable: false,
-            ..Default::default()
-        })
+    iced::daemon("Gomi", Gomi::update, Gomi::view)
         .font(include_bytes!("../fonts/Microns.ttf").as_slice())
-        .window_size(Size::new(WINDOW_WIDTH, WINDOW_HEIGHT))
         .default_font(Font::MONOSPACE)
         .antialiasing(true)
         .theme(Gomi::theme)

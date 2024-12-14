@@ -1,4 +1,5 @@
 use rusqlite::Connection;
+use tracing::info;
 
 use crate::config::get_db_path;
 
@@ -122,11 +123,7 @@ impl Storage {
             .iter()
             .filter(|item| url.contains(&item.match_value))
             .next();
-        if matched.is_none() {
-            None
-        } else {
-            Some(result[0].clone())
-        }
+        matched.cloned()
     }
     pub fn insert_browser_profile(&mut self, browser_profile: BrowserProfile) {
         self.connection
