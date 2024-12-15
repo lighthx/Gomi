@@ -71,7 +71,6 @@ MIT
 ## TODO
 
 - [ ] Add a management page for matched URLs; currently, deleting/editing matched URLs is not supported.
-- [ ] Support refreshing the browser list; currently, the list is fetched from the browser’s app path only during the initial load.
 - [ ] Hide the app icon in the dock; currently, it is always shown in the dock due to winit.
 - [ ] Improve the ugly UI
 
