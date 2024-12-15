@@ -21,3 +21,6 @@ pub fn remove_icon<'a, Message>() -> Element<'a, Message> {
 pub fn back_icon<'a, Message>() -> Element<'a, Message> {
     icon('\u{0e700}')
 }
+pub fn refresh_icon<'a, Message>() -> Element<'a, Message> {
+    icon('\u{0e796}')
+}

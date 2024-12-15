@@ -3,14 +3,15 @@ mod config;
 mod icons;
 mod platform_tools;
 mod storage;
+use components::footer::footer;
 use components::icon_button::{icon_button, ICON};
 use components::list_item::list_item;
 use components::scroll_view::scroll_view;
 use config::{LOG_DIR, LOG_FILE, WINDOW_HEIGHT, WINDOW_WIDTH};
 use iced::keyboard::Modifiers;
-use iced::widget::{text_editor, text_input, tooltip};
+use iced::widget::{text_editor, text_input};
 use iced::window::Position;
-use iced::{event, keyboard, Alignment, Event, Font, Subscription};
+use iced::{event, keyboard, Alignment, Event, Font, Padding, Subscription};
 use iced::{
     widget::{button, center, container, image, row, text, Column, Text},
     window, Background, Border, Color, Element, Length, Shadow, Size, Task, Theme,
@@ -22,7 +23,6 @@ use std::time::{Duration, Instant};
 use storage::{BrowserInfo, BrowserProfile, MatchItem, Storage};
 use tracing::info;
 use tracing_subscriber::fmt::format::FmtSpan;
-use url::Url;
 
 struct Gomi {
     is_default_browser: bool,
@@ -77,6 +77,7 @@ enum Message {
     MoveWindow(window::Id),
     WindowClosed,
     WindowUnfocused,
+    RefreshApplication,
 }
 
 impl Gomi {
@@ -323,6 +324,18 @@ impl Gomi {
                     Task::none()
                 }
             }
+            Message::RefreshApplication => {
+                let mut storage = self.storage.clone();
+                Task::perform(
+                    async move {
+                        storage.delete_all_browsers();
+                        let browsers = platform_tools::get_url_handlers().await;
+                        storage.batch_insert_browsers(browsers.clone());
+                        browsers
+                    },
+                    Message::GoHome,
+                )
+            }
         }
     }
 
@@ -330,7 +343,6 @@ impl Gomi {
         let content = match &self.current_page {
             Page::Home => {
                 let browsers = self.browser_list.clone().unwrap_or_default();
-                let current_url = self.current_url.clone();
                 let is_default_browser = self.is_default_browser;
                 if !is_default_browser {
                     container(center(
@@ -414,65 +426,23 @@ impl Gomi {
                             },
                             ICON::Profile,
                             Message::ListProfiles(browser.clone()),
+                            "List profiles".to_string(),
                         ));
                     }
 
-                    let footer = if let Some(url) = current_url {
-                        let url_cloned = url.clone();
-                        let url = Url::parse(&url).unwrap();
-                        let host = url.host_str().unwrap_or_default().to_string();
-
-                        container(tooltip(
-                            Text::new(host).size(13).style(|_| text::Style {
-                                color: Some(Color::from_rgb(0.2, 0.2, 0.2)),
-                            }),
-                            container(
-                                Text::new(url_cloned)
-                                    .size(13)
-                                    .color(Color::from_rgb(0.2, 0.2, 0.2)),
-                            )
-                            .padding(4)
-                            .style(|_| container::Style {
-                                background: Some(Background::Color(Color::from_rgb(0.9, 0.9, 1.0))),
-                                border: Border {
-                                    radius: 4.0.into(),
-                                    width: 1.0,
-                                    color: Color::from_rgb(0.7, 0.7, 0.9),
-                                },
-                                ..Default::default()
-                            }),
-                            tooltip::Position::Top,
-                        ))
-                        .padding([8, 12])
-                        .style(|_| container::Style {
-                            background: Some(Background::Color(Color::from_rgb(0.95, 0.95, 1.0))),
-                            border: Border {
-                                radius: 8.0.into(),
-                                width: 1.0,
-                                color: Color::from_rgb(0.8, 0.8, 0.9),
-                            },
-                            ..Default::default()
-                        })
-                        .center_x(Length::Fill)
-                    } else {
-                        container(Text::new(""))
-                    };
-
                     container(
-                        Column::new()
-                            .push(
-                                container(scroll_view(content))
-                                    .style(|_| container::Style {
-                                        background: Some(Background::Color(Color::from_rgb(
-                                            0.98, 0.98, 0.98,
-                                        ))),
-                                        ..Default::default()
-                                    })
-                                    .padding(2)
-                                    .width(Length::Fill)
-                                    .height(Length::Fill),
-                            )
-                            .push(footer),
+                        Column::new().push(
+                            container(scroll_view(content))
+                                .style(|_| container::Style {
+                                    background: Some(Background::Color(Color::from_rgb(
+                                        0.98, 0.98, 0.98,
+                                    ))),
+                                    ..Default::default()
+                                })
+                                .padding(2)
+                                .width(Length::Fill)
+                                .height(Length::Fill),
+                        ),
                     )
                     .width(Length::Fill)
                     .height(Length::Fill)
@@ -483,7 +453,10 @@ impl Gomi {
                 browser,
                 profile_text,
             } => {
-                let mut content = Column::new().spacing(20).padding(20).width(Length::Fill);
+                let mut content = Column::new()
+                    .padding(Padding::new(12.0))
+                    .width(Length::Fill)
+                    .height(Length::Fill);
 
                 let profile_list =
                     profiles
@@ -510,23 +483,29 @@ impl Gomi {
                                 },
                                 ICON::Remove,
                                 Message::DeleteProfile(profile.profile.clone()),
+                                "Delete profile".to_string(),
                             );
                             column.push(profile_row)
                         });
-                content = content.push(scroll_view(profile_list).height(200.0));
+                content = content.push(
+                    container(scroll_view(profile_list))
+                        .height(Length::Fill)
+                        .width(Length::Fill),
+                );
 
-                let add_row = row![
-                    icon_button(ICON::Back, Message::Back),
+                let input_row = row![
+                    icon_button(ICON::Back, Message::Back, "Back to home page".to_string()),
                     text_input("New Profile", &profile_text)
                         .on_input(Message::TypeProfileText)
                         .on_submit(Message::AddProfile)
                         .width(Length::Fill),
-                    icon_button(ICON::Add, Message::AddProfile)
+                    icon_button(ICON::Add, Message::AddProfile, "Add profile".to_string())
                 ]
                 .spacing(12)
-                .align_y(Alignment::Center);
+                .align_y(Alignment::Center)
+                .height(30.0);
 
-                content = content.push(add_row);
+                content = content.push(input_row);
 
                 container(content)
                     .width(Length::Fill)
@@ -544,7 +523,11 @@ impl Gomi {
                     .width(Length::Fill)
                     .height(Length::Fill);
                 let footer = row![
-                    icon_button(ICON::Back, Message::Back),
+                    icon_button(
+                        ICON::Back,
+                        Message::Back,
+                        "Back to previous page".to_string()
+                    ),
                     button(Text::new("Save And Open").size(14).style(|_| text::Style {
                         color: Some(Color::from_rgb(1.0, 1.0, 1.0)),
                     }))
@@ -569,10 +552,11 @@ impl Gomi {
                 container(content)
             }
         };
-        content.into()
+        let footer = footer(self.current_url.clone(), Message::RefreshApplication);
+        Column::new().push(content).push(footer).into()
     }
 
-    fn theme(&self, window: window::Id) -> Theme {
+    fn theme(&self, _: window::Id) -> Theme {
         Theme::default()
     }
 

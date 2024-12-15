@@ -15,6 +15,7 @@ pub fn list_item<'a, Message: 'a + Clone>(
     on_press: Message,
     end_icon: ICON,
     end_on_press: Message,
+    end_tip: String,
 ) -> Button<'a, Message> {
     let mut content = row![]
         .spacing(12)
@@ -34,7 +35,7 @@ pub fn list_item<'a, Message: 'a + Clone>(
             .width(Length::Fill),
     );
 
-    content = content.push(icon_button(end_icon, end_on_press));
+    content = content.push(icon_button(end_icon, end_on_press, end_tip));
 
     button(content)
         .on_press(on_press)

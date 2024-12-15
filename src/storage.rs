@@ -1,9 +1,9 @@
-use rusqlite::Connection;
-
 use crate::config::get_db_path;
-
+use rusqlite::Connection;
+use std::sync::{Arc, Mutex};
+#[derive(Debug, Clone)]
 pub struct Storage {
-    connection: Connection,
+    connection: Arc<Mutex<Connection>>,
 }
 
 #[derive(Debug, Clone)]
@@ -38,10 +38,13 @@ impl Storage {
          CREATE TABLE IF NOT EXISTS matches (browser_path text not null, profile text, match_type text not null, match_value text primary key);
          COMMIT;
          ").unwrap();
-        Storage { connection }
+        Storage {
+            connection: Arc::new(Mutex::new(connection)),
+        }
     }
     pub fn batch_insert_browsers(&mut self, browsers: Vec<BrowserInfo>) {
-        let tx = self.connection.transaction().unwrap();
+        let mut connection = self.connection.lock().unwrap();
+        let tx = connection.transaction().unwrap();
         {
             let mut stmt = tx
                 .prepare("INSERT INTO browsers (name, path, icon_data) VALUES (?, ?, ?) ON CONFLICT(path) DO NOTHING")
@@ -54,9 +57,15 @@ impl Storage {
         }
         tx.commit().unwrap();
     }
-    pub fn get_browsers(&mut self) -> Vec<BrowserInfo> {
-        let mut stmt = self
-            .connection
+
+    pub fn delete_all_browsers(&mut self) {
+        let connection = self.connection.lock().unwrap();
+        connection.execute("DELETE FROM browsers", ()).unwrap();
+    }
+
+    pub fn get_browsers(&self) -> Vec<BrowserInfo> {
+        let connection = self.connection.lock().unwrap();
+        let mut stmt = connection
             .prepare("SELECT name, path, icon_data FROM browsers")
             .unwrap();
         stmt.query_map([], |row| {
@@ -70,17 +79,18 @@ impl Storage {
         .map(|r| r.unwrap())
         .collect()
     }
-    pub fn insert_match(&mut self, match_item: MatchItem) {
-        self.connection
+    pub fn insert_match(&self, match_item: MatchItem) {
+        let connection = self.connection.lock().unwrap();
+        connection
             .execute(
                 "INSERT INTO matches (browser_path, profile, match_type, match_value) VALUES (?, ?, ?, ?) ON CONFLICT(match_value) DO NOTHING",
                 (match_item.browser_path, match_item.profile, match_item.match_type, match_item.match_value),
             )
             .unwrap();
     }
-    pub fn find_equal_matches_by_url(&mut self, url: String) -> Option<MatchItem> {
-        let mut stmt = self
-            .connection
+    pub fn find_equal_matches_by_url(&self, url: String) -> Option<MatchItem> {
+        let connection = self.connection.lock().unwrap();
+        let mut stmt = connection
             .prepare("SELECT * FROM matches WHERE match_type = ? AND match_value = ?")
             .unwrap();
         let result: Vec<MatchItem> = stmt
@@ -101,9 +111,9 @@ impl Storage {
             Some(result[0].clone())
         }
     }
-    pub fn find_contain_matches_by_url(&mut self, url: String) -> Option<MatchItem> {
-        let mut stmt = self
-            .connection
+    pub fn find_contain_matches_by_url(&self, url: String) -> Option<MatchItem> {
+        let connection = self.connection.lock().unwrap();
+        let mut stmt = connection
             .prepare("SELECT * FROM matches WHERE match_type = ?")
             .unwrap();
         let result: Vec<MatchItem> = stmt
@@ -124,17 +134,18 @@ impl Storage {
             .next();
         matched.cloned()
     }
-    pub fn insert_browser_profile(&mut self, browser_profile: BrowserProfile) {
-        self.connection
+    pub fn insert_browser_profile(&self, browser_profile: BrowserProfile) {
+        let connection = self.connection.lock().unwrap();
+        connection
             .execute(
                 "INSERT INTO browser_profiles (browser_path, profile, description) VALUES (?, ?, ?) ON CONFLICT(browser_path, profile) DO NOTHING",
                 (browser_profile.browser_path, browser_profile.profile, browser_profile.description),
             )
             .unwrap();
     }
-    pub fn get_browser_profiles(&mut self, browser_path: String) -> Vec<BrowserProfile> {
-        let mut stmt = self
-            .connection
+    pub fn get_browser_profiles(&self, browser_path: String) -> Vec<BrowserProfile> {
+        let connection = self.connection.lock().unwrap();
+        let mut stmt = connection
             .prepare("SELECT * FROM browser_profiles WHERE browser_path = ?")
             .unwrap();
         stmt.query_map([browser_path], |row| {
@@ -148,28 +159,27 @@ impl Storage {
         .map(|r| r.unwrap())
         .collect()
     }
-    pub fn delete_browser_profile(&mut self, browser_path: String, profile: String) {
-        self.connection
+    pub fn delete_browser_profile(&self, browser_path: String, profile: String) {
+        let connection = self.connection.lock().unwrap();
+        connection
             .execute(
                 "DELETE FROM browser_profiles WHERE browser_path = ? AND profile = ?",
                 (browser_path, profile),
             )
             .unwrap();
     }
-    pub fn delete_match_by_profile_and_browser_path(
-        &mut self,
-        browser_path: String,
-        profile: String,
-    ) {
-        self.connection
+    pub fn delete_match_by_profile_and_browser_path(&self, browser_path: String, profile: String) {
+        let connection = self.connection.lock().unwrap();
+        connection
             .execute(
                 "DELETE FROM matches WHERE browser_path = ? AND profile = ?",
                 (browser_path, profile),
             )
             .unwrap();
     }
-    pub fn delete_match_by_match_value(&mut self, match_value: String) {
-        self.connection
+    pub fn delete_match_by_match_value(&self, match_value: String) {
+        let connection = self.connection.lock().unwrap();
+        connection
             .execute("DELETE FROM matches WHERE match_value = ?", (match_value,))
             .unwrap();
     }
@@ -193,8 +203,6 @@ mod tests {
     fn test_browser_crud() {
         cleanup_database();
         let mut storage = Storage::new();
-
-        // 测试插入多个浏览器
         let test_browsers = vec![
             BrowserInfo {
                 name: "Browser 1".to_string(),
@@ -218,9 +226,8 @@ mod tests {
     #[test]
     fn test_profile_operations() {
         cleanup_database();
-        let mut storage = Storage::new();
+        let storage = Storage::new();
 
-        // 测试插入多个配置文件
         let profiles = vec![
             BrowserProfile {
                 browser_path: "/test/path1".to_string(),
@@ -252,7 +259,7 @@ mod tests {
     #[test]
     fn test_match_rules() {
         cleanup_database();
-        let mut storage = Storage::new();
+        let storage = Storage::new();
 
         let matches = vec![
             MatchItem {
@@ -295,9 +302,7 @@ mod tests {
     #[test]
     fn test_empty_database() {
         cleanup_database();
-        let mut storage = Storage::new();
-
-        // 测试空数据库的查询
+        let storage = Storage::new();
         assert!(storage.get_browsers().is_empty());
         assert!(storage
             .get_browser_profiles("NonExistent".to_string())
