@@ -1,24 +1,48 @@
 use iced::{
-    widget::{button, center, Button},
+    widget::{button, center, container, tooltip, Button, Text},
     Background, Border, Color, Shadow,
 };
 
-use super::icons::{add_icon, back_icon, profile_icon, remove_icon};
+use super::icons::{add_icon, back_icon, profile_icon, refresh_icon, remove_icon};
 
 pub enum ICON {
     Profile,
     Add,
     Remove,
     Back,
+    Refresh,
 }
 
-pub fn icon_button<'a, Message: 'a>(icon: ICON, on_press: Message) -> Button<'a, Message> {
-    button(center(match icon {
-        ICON::Profile => profile_icon(),
-        ICON::Add => add_icon(),
-        ICON::Remove => remove_icon(),
-        ICON::Back => back_icon(),
-    }))
+pub fn icon_button<'a, Message: Clone + 'a>(
+    icon: ICON,
+    on_press: Message,
+    tip: String,
+) -> Button<'a, Message> {
+    button(tooltip(
+        center(match icon {
+            ICON::Profile => profile_icon(),
+            ICON::Add => add_icon(),
+            ICON::Remove => remove_icon(),
+            ICON::Back => back_icon(),
+            ICON::Refresh => refresh_icon(),
+        }),
+        container(
+            Text::new(tip)
+                .size(13)
+                .color(Color::from_rgb(0.2, 0.2, 0.2)),
+        )
+        .padding(4)
+        .style(|_| container::Style {
+            background: Some(Background::Color(Color::from_rgb(0.9, 0.9, 1.0))),
+            border: Border {
+                radius: 4.0.into(),
+                width: 1.0,
+                color: Color::from_rgb(0.7, 0.7, 0.9),
+            },
+            ..Default::default()
+        }),
+        tooltip::Position::FollowCursor,
+    ))
     .padding(0.0)
     .style(|_, _| button::Style {
         background: Some(Background::Color(Color::from_rgb(1.0, 1.0, 1.0))),

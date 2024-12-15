@@ -1,3 +1,4 @@
+pub mod footer;
 pub mod icon_button;
 pub mod icons;
 pub mod list_item;
