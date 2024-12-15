@@ -15,8 +15,8 @@ use iced::{
     widget::{button, center, container, image, row, text, Column, Text},
     window, Background, Border, Color, Element, Length, Shadow, Size, Task, Theme,
 };
-use platform_tools::{ensure_default_browser, get_mouse_position};
 use platform_tools::open_url;
+use platform_tools::{ensure_default_browser, get_mouse_position};
 use std::mem;
 use std::time::{Duration, Instant};
 use storage::{BrowserInfo, BrowserProfile, MatchItem, Storage};
@@ -75,6 +75,8 @@ enum Message {
     WindowOpened(window::Id),
     CloseWindow,
     MoveWindow(window::Id),
+    WindowClosed,
+    WindowUnfocused,
 }
 
 impl Gomi {
@@ -110,6 +112,7 @@ impl Gomi {
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
+        info!("message: {:?}", message);
         match message {
             Message::GoHome(browsers) => {
                 self.browser_list = Some(browsers);
@@ -296,18 +299,29 @@ impl Gomi {
             }
             Message::WindowOpened(window_id) => {
                 self.current_window = Some(window_id);
+                self.launch_time = Instant::now();
                 Task::none()
             }
             Message::CloseWindow => {
                 if let Some(window_id) = self.current_window {
-                    let rs = window::close(window_id);
-                    self.current_page = Page::Home;
-                    self.stacks.clear();
-                    self.current_url = None;
-                    self.current_window = None;
-                    return rs;
+                    Task::batch([window::close(window_id), Task::done(Message::WindowClosed)])
+                } else {
+                    Task::none()
                 }
+            }
+            Message::WindowClosed => {
+                self.current_page = Page::Home;
+                self.stacks.clear();
+                self.current_url = None;
+                self.current_window = None;
                 Task::none()
+            }
+            Message::WindowUnfocused => {
+                if self.launch_time.elapsed().as_secs() > 2 {
+                    Task::done(Message::CloseWindow)
+                } else {
+                    Task::none()
+                }
             }
         }
     }
@@ -405,7 +419,6 @@ impl Gomi {
 
                     let footer = if let Some(url) = current_url {
                         let url_cloned = url.clone();
-                        info!("url_cloned: {}", url_cloned);
                         let url = Url::parse(&url).unwrap();
                         let host = url.host_str().unwrap_or_default().to_string();
 
@@ -572,6 +585,8 @@ impl Gomi {
                     Event::Keyboard(keyboard::Event::ModifiersChanged(modifiers)) => {
                         Some(Message::KeyboardModifiersChanged(modifiers))
                     }
+                    Event::Window(window::Event::Unfocused) => Some(Message::WindowUnfocused),
+                    Event::Window(window::Event::Closed) => Some(Message::WindowClosed),
                     _ => None,
                 }
             }),
