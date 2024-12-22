@@ -54,6 +54,17 @@ jobs:
       - name: Build Application
         run: |
           cargo bundle --release --target ${{ matrix.target }}
+          
+      - name: Update Info.plist
+        run: |
+          BUNDLE_PATH="target/${{ matrix.target }}/release/bundle/osx/Gomi.app/Contents/Info.plist"
+          plutil -insert 'CFBundleURLTypes' -json '[{
+            "CFBundleTypeRole": "Viewer",
+            "CFBundleURLName": "HyperText Transfer Protocol",
+            "CFBundleURLSchemes": ["http", "https"]
+          }]' "$BUNDLE_PATH"
+          plutil -insert 'LSUIElement' -bool true "$BUNDLE_PATH"
+          plutil -insert 'LSMinimumSystemVersion' -string "10.15" "$BUNDLE_PATH"
 
       - name: Sign and Notarize
         env:

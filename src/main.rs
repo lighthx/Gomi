@@ -83,6 +83,7 @@ enum Message {
 impl Gomi {
     fn new() -> (Self, Task<Message>) {
         let storage = Storage::new();
+
         (
             Self {
                 browser_list: None,
