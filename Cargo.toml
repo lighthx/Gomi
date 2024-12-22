@@ -5,7 +5,7 @@ edition = "2021"
 
 [dependencies]
 cocoa = "0.26.0"
-iced = {git = "https://github.com/iced-rs/iced.git", features = ["tokio","image"]}
+iced = {path = "/Users/huaxin/my_projects/iced", features = ["tokio","image"]}
 core-foundation = "0.9.3"
 core-graphics = "0.23.1"
 objc = "0.2.7"
@@ -18,9 +18,10 @@ tracing-subscriber = "0.3.19"
 tracing-appender = "0.2.3"
 url = "2.5.4"
 
+[patch.crates-io]
+winit = { git = "https://github.com/lighthx/winit.git",branch = "v0.30.x" }
+
 [package.metadata.bundle]
 name = "Gomi"
 identifier = "com.lighthx.gomi"
 icon = ["resources/icon.icns"]
-[package.metadata.bundle.mac]
-info_plist = "resources/Info.plist"

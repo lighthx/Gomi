@@ -71,7 +71,6 @@ MIT
 ## TODO
 
 - [ ] Add a management page for matched URLs; currently, deleting/editing matched URLs is not supported.
-- [ ] Hide the app icon in the dock; currently, it is always shown in the dock due to winit.
 - [ ] Improve the ugly UI
 
 ## Contributing

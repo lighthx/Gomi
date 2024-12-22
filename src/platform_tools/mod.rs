@@ -1,4 +1,4 @@
-use cocoa::appkit::{NSApplicationActivationPolicy, NSCompositingOperation};
+use cocoa::appkit::NSCompositingOperation;
 use cocoa::base::{id, nil};
 use cocoa::foundation::{NSPoint, NSRect, NSSize, NSString};
 use core_foundation::{
@@ -275,14 +275,6 @@ pub fn open_url(url: String, browser_path: String, profile: Option<String>) {
             .arg(url.clone())
             .spawn()
             .unwrap();
-    }
-}
-
-pub fn hide_app_icon() {
-    unsafe {
-        let cls = class!(NSApplication);
-        let app: id = msg_send![cls, sharedApplication];
-        let _: () = msg_send![app, setActivationPolicy:NSApplicationActivationPolicy::NSApplicationActivationPolicyAccessory];
     }
 }
 
