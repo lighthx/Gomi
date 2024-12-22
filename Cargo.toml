@@ -5,7 +5,7 @@ edition = "2021"
 
 [dependencies]
 cocoa = "0.26.0"
-iced = {path = "/Users/huaxin/my_projects/iced", features = ["tokio","image"]}
+iced = {git = "https://github.com/iced-rs/iced.git", features = ["tokio","image"]}
 core-foundation = "0.9.3"
 core-graphics = "0.23.1"
 objc = "0.2.7"
