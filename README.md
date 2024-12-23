@@ -72,6 +72,8 @@ MIT
 
 - [ ] Add a management page for matched URLs; currently, deleting/editing matched URLs is not supported.
 - [ ] Improve the ugly UI
+- [x] Hide the app icon in the dock
+- [ ] Prevent the app move out of the screen
 
 ## Contributing
 Contributions are welcome! Please feel free to submit a Pull Request.

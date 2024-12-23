@@ -6,6 +6,7 @@ use core_foundation::{
     string::{CFString, CFStringRef},
 };
 use iced::Point;
+use objc::runtime::{Class, Object};
 use objc::{class, msg_send, sel, sel_impl};
 use std::fs;
 
@@ -250,11 +251,18 @@ pub fn get_mouse_position() -> Point {
         let screen: id = msg_send![class!(NSScreen), mainScreen];
         let frame: NSRect = msg_send![screen, frame];
 
-        let y = frame.size.height - point.y;
-        Point::new(
-            point.x as f32 - WINDOW_WIDTH / 2.0,
-            y as f32 - WINDOW_HEIGHT / 2.0,
-        )
+        let x = (point.x as f32).clamp(
+            WINDOW_WIDTH / 2.0,
+            frame.size.width as f32 - WINDOW_WIDTH / 2.0,
+        ) - WINDOW_WIDTH / 2.0;
+
+        let y = (frame.size.height - point.y) as f32;
+        let y = y.clamp(
+            WINDOW_HEIGHT / 2.0,
+            frame.size.height as f32 - WINDOW_HEIGHT / 2.0,
+        ) - WINDOW_HEIGHT / 2.0;
+
+        Point::new(x, y)
     }
 }
 
