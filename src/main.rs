@@ -21,10 +21,13 @@ use platform_tools::{ensure_default_browser, get_mouse_position};
 use std::mem;
 use std::time::{Duration, Instant};
 use storage::{BrowserInfo, BrowserProfile, MatchItem, Storage};
-use tracing::info;
+use tracing::{info, warn};
 use tracing_subscriber::fmt::format::FmtSpan;
+// use tray_icon::menu::{Menu, MenuItem};
+// use tray_icon::{TrayIcon, TrayIconBuilder, TrayIconEvent};
 
 struct Gomi {
+    // tray: TrayIcon,
     is_default_browser: bool,
     current_url: Option<String>,
     browser_list: Option<Vec<BrowserInfo>>,
@@ -33,7 +36,8 @@ struct Gomi {
     keyboard: Modifiers,
     launch_time: Instant,
     stacks: Vec<Page>,
-    current_window: Option<window::Id>,
+    current_menu_window: Option<window::Id>,
+    current_setting_window: Option<window::Id>,
 }
 #[derive(Debug)]
 enum Page {
@@ -56,6 +60,12 @@ enum ExternalOperation {
     SaveContain,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WindowType {
+    Menu,
+    Setting,
+}
+
 #[derive(Debug, Clone)]
 enum Message {
     GoHome(Vec<BrowserInfo>),
@@ -71,18 +81,33 @@ enum Message {
     ShowMatchContainEditor(String, Option<String>),
     TypeMatchContainText(text_editor::Action),
     KeyboardModifiersChanged(Modifiers),
-    OpenWindow,
-    WindowOpened(window::Id),
-    CloseWindow,
+    OpenWindow(WindowType),
+    WindowOpened(WindowType, window::Id),
+    CloseWindow(WindowType),
     MoveWindow(window::Id),
-    WindowClosed,
-    WindowUnfocused,
+    WindowClosed(window::Id),
+    WindowUnfocused(window::Id),
     RefreshApplication,
+    None,
 }
 
 impl Gomi {
     fn new() -> (Self, Task<Message>) {
         let storage = Storage::new();
+        // let tray = TrayIconBuilder::new()
+        //     .with_menu(Box::new(
+        //         Menu::with_items(&[&MenuItem::new("rule settings", true, None)]).unwrap(),
+        //     ))
+        //     .with_tooltip("Gomi")
+        //     .with_title("Gomi")
+        //     .build()
+        //     .unwrap();
+        // unsafe {
+        //     use core_foundation::runloop::{CFRunLoopGetMain, CFRunLoopWakeUp};
+
+        //     let rl = CFRunLoopGetMain();
+        //     CFRunLoopWakeUp(rl);
+        // }
 
         (
             Self {
@@ -95,10 +120,13 @@ impl Gomi {
                 keyboard: Modifiers::default(),
                 launch_time: Instant::now(),
                 stacks: vec![],
-                current_window: None,
+                current_menu_window: None,
+                current_setting_window: None,
+                // tray:None,
             },
             Task::perform(
                 async move {
+                    info!("Gomi");
                     let mut storage = Storage::new();
                     let mut browsers = storage.get_browsers();
                     if browsers.is_empty() {
@@ -119,7 +147,7 @@ impl Gomi {
             Message::GoHome(browsers) => {
                 self.browser_list = Some(browsers);
                 if !ensure_default_browser() {
-                    return Task::done(Message::OpenWindow);
+                    return Task::done(Message::OpenWindow(WindowType::Menu));
                 }
                 Task::none()
             }
@@ -152,7 +180,7 @@ impl Gomi {
                             }
                         }
                     }
-                    return Task::done(Message::CloseWindow);
+                    return Task::done(Message::CloseWindow(WindowType::Menu));
                 }
                 Task::none()
             }
@@ -175,10 +203,10 @@ impl Gomi {
                         None,
                     ));
                 }
-                if let Some(window_id) = self.current_window {
+                if let Some(window_id) = self.current_menu_window {
                     return Task::done(Message::MoveWindow(window_id));
                 }
-                Task::done(Message::OpenWindow)
+                Task::done(Message::OpenWindow(WindowType::Menu))
             }
             Message::MoveWindow(window_id) => window::move_to(window_id, get_mouse_position()),
             Message::SetAsDefault => {
@@ -190,7 +218,7 @@ impl Gomi {
                     let is_default_browser = platform_tools::ensure_default_browser();
                     self.is_default_browser = is_default_browser;
                     if is_default_browser {
-                        return Task::done(Message::CloseWindow);
+                        return Task::done(Message::CloseWindow(WindowType::Menu));
                     }
                 }
                 Task::none()
@@ -290,41 +318,74 @@ impl Gomi {
                 self.keyboard = modifiers;
                 Task::none()
             }
-            Message::OpenWindow => {
+            Message::OpenWindow(window_type) => {
+                if self.current_menu_window.is_some() && window_type == WindowType::Menu {
+                    return Task::none();
+                }
+                if self.current_setting_window.is_some() && window_type == WindowType::Setting {
+                    return Task::none();
+                }
                 let position = get_mouse_position();
                 let (_, open) = window::open(window::Settings {
                     position: Position::Specific(position),
                     size: Size::new(WINDOW_WIDTH, WINDOW_HEIGHT),
                     ..Default::default()
                 });
-                open.map(Message::WindowOpened)
+                open.map(move |window_id| Message::WindowOpened(window_type, window_id))
             }
-            Message::WindowOpened(window_id) => {
-                self.current_window = Some(window_id);
+            Message::WindowOpened(window_type, window_id) => {
+                match window_type {
+                    WindowType::Menu => self.current_menu_window = Some(window_id),
+                    WindowType::Setting => self.current_setting_window = Some(window_id),
+                }
                 self.launch_time = Instant::now();
                 Task::none()
             }
-            Message::CloseWindow => {
-                if let Some(window_id) = self.current_window {
-                    Task::batch([window::close(window_id), Task::done(Message::WindowClosed)])
-                } else {
-                    Task::none()
+            Message::CloseWindow(window_type) => match window_type {
+                WindowType::Menu => {
+                    if let Some(window_id) = self.current_menu_window {
+                        return window::close(window_id);
+                    } else {
+                        return Task::none();
+                    }
                 }
-            }
-            Message::WindowClosed => {
-                self.current_page = Page::Home;
-                self.stacks.clear();
-                self.current_url = None;
-                self.current_window = None;
+                WindowType::Setting => {
+                    if let Some(window_id) = self.current_setting_window {
+                        return window::close(window_id);
+                    } else {
+                        return Task::none();
+                    }
+                }
+            },
+            Message::WindowClosed(window) => {
+                if let Some(window_id) = self.current_menu_window {
+                    if window == window_id {
+                        self.current_page = Page::Home;
+                        self.stacks.clear();
+                        self.current_url = None;
+                        self.current_menu_window = None;
+                    }
+                }
                 Task::none()
             }
-            Message::WindowUnfocused => {
-                if self.launch_time.elapsed().as_secs() > 2 {
-                    Task::done(Message::CloseWindow)
-                } else {
-                    Task::none()
+            Message::WindowUnfocused(window) => {
+                if let Some(window_id) = self.current_menu_window {
+                    if self.launch_time.elapsed().as_secs() > 2 && window_id == window {
+                        return Task::done(Message::CloseWindow(WindowType::Menu));
+                    } else {
+                        return Task::none();
+                    }
                 }
+                if let Some(window_id) = self.current_setting_window {
+                    if self.launch_time.elapsed().as_secs() > 2 && window_id == window {
+                        return Task::done(Message::CloseWindow(WindowType::Setting));
+                    } else {
+                        return Task::none();
+                    }
+                }
+                Task::none()
             }
+
             Message::RefreshApplication => {
                 let mut storage = self.storage.clone();
                 Task::perform(
@@ -337,6 +398,7 @@ impl Gomi {
                     Message::GoHome,
                 )
             }
+            Message::None => Task::none(),
         }
     }
 
@@ -565,16 +627,33 @@ impl Gomi {
         Subscription::batch([
             event::listen_url().map(Message::ReceiveUrl),
             iced::time::every(Duration::from_secs(1)).map(|_| Message::CheckDefaultStatus),
-            event::listen_with(|event, _status, _window| -> Option<Message> {
+            event::listen_with(|event, _status, window| -> Option<Message> {
                 match event {
                     Event::Keyboard(keyboard::Event::ModifiersChanged(modifiers)) => {
                         Some(Message::KeyboardModifiersChanged(modifiers))
                     }
-                    Event::Window(window::Event::Unfocused) => Some(Message::WindowUnfocused),
-                    Event::Window(window::Event::Closed) => Some(Message::WindowClosed),
+                    Event::Window(window::Event::Unfocused) => {
+                        Some(Message::WindowUnfocused(window))
+                    }
+                    Event::Window(window::Event::Closed) => Some(Message::WindowClosed(window)),
                     _ => None,
                 }
             }),
+            // iced::time::every(Duration::from_secs(1)).map(|_| {
+            //     info!("11111");
+            //     let event = TrayIconEvent::receiver().try_recv();
+            //     if let Ok(event) = event {
+            //         match event {
+            //             TrayIconEvent::Click { id, .. } => {
+            //                 info!("tray icon clicked: {:?}", id);
+            //                 Message::None
+            //             }
+            //             _ => Message::None,
+            //         }
+            //     } else {
+            //         Message::None
+            //     }
+            // }),
         ])
     }
 }
@@ -586,11 +665,10 @@ fn main() -> iced::Result {
         .with_writer(non_blocking)
         .with_span_events(FmtSpan::CLOSE)
         .init();
-
+    warn!("aaa");
     iced::daemon("Gomi", Gomi::update, Gomi::view)
         .font(include_bytes!("../fonts/Microns.ttf").as_slice())
         .default_font(Font::MONOSPACE)
-        .antialiasing(true)
         .theme(Gomi::theme)
         .subscription(Gomi::subscription)
         .run_with(Gomi::new)
