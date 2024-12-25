@@ -4,7 +4,7 @@ use iced::{
 };
 use url::Url;
 
-use crate::components::icon_button::{icon_button, ICON};
+use crate::pages::components::icon_button::{icon_button, ICON};
 
 pub fn footer<'a, Message: Clone + 'a>(
     url: Option<String>,

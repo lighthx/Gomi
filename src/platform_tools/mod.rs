@@ -1,4 +1,4 @@
-use cocoa::appkit::NSCompositingOperation;
+use cocoa::appkit::{NSApplicationActivationPolicy, NSCompositingOperation};
 use cocoa::base::{id, nil};
 use cocoa::foundation::{NSPoint, NSRect, NSSize, NSString};
 use core_foundation::{
@@ -6,17 +6,15 @@ use core_foundation::{
     string::{CFString, CFStringRef},
 };
 use iced::Point;
-use objc::runtime::{Class, Object};
 use objc::{class, msg_send, sel, sel_impl};
 use std::fs;
 
-use tokio::task;
 
-use crate::config::{WINDOW_HEIGHT, WINDOW_WIDTH};
+use crate::config::{MENU_WINDOW_HEIGHT, MENU_WINDOW_WIDTH};
 use crate::storage::BrowserInfo;
 
-pub async fn get_url_handlers() -> Vec<BrowserInfo> {
-    let result = task::spawn_blocking(move || {
+pub  fn get_url_handlers() -> Vec<BrowserInfo> {
+
         let mut result = Vec::new();
         let app_dirs = ["/Applications"];
 
@@ -109,11 +107,6 @@ pub async fn get_url_handlers() -> Vec<BrowserInfo> {
             }
         }
         result
-    })
-    .await
-    .unwrap_or_default();
-
-    result
 }
 
 unsafe fn get_app_name(file_manager: id, path: id) -> Option<String> {
@@ -252,15 +245,15 @@ pub fn get_mouse_position() -> Point {
         let frame: NSRect = msg_send![screen, frame];
 
         let x = (point.x as f32).clamp(
-            WINDOW_WIDTH / 2.0,
-            frame.size.width as f32 - WINDOW_WIDTH / 2.0,
-        ) - WINDOW_WIDTH / 2.0;
+            MENU_WINDOW_WIDTH / 2.0,
+            frame.size.width as f32 - MENU_WINDOW_WIDTH / 2.0,
+        ) - MENU_WINDOW_WIDTH / 2.0;
 
         let y = (frame.size.height - point.y) as f32;
         let y = y.clamp(
-            WINDOW_HEIGHT / 2.0,
-            frame.size.height as f32 - WINDOW_HEIGHT / 2.0,
-        ) - WINDOW_HEIGHT / 2.0;
+            MENU_WINDOW_HEIGHT / 2.0,
+            frame.size.height as f32 - MENU_WINDOW_HEIGHT / 2.0,
+        ) - MENU_WINDOW_HEIGHT / 2.0;
 
         Point::new(x, y)
     }
@@ -290,4 +283,12 @@ pub fn open_url(url: String, browser_path: String, profile: Option<String>) {
 extern "C" {
     fn LSSetDefaultHandlerForURLScheme(scheme: CFStringRef, bundle_id: CFStringRef) -> i32;
     fn LSCopyDefaultHandlerForURLScheme(scheme: CFStringRef) -> CFStringRef;
+}
+
+pub fn show_app() {
+    unsafe {
+        let cls = class!(NSApplication);
+        let app: id = msg_send![cls, sharedApplication];
+        let _: () = msg_send![app, setActivationPolicy:NSApplicationActivationPolicy::NSApplicationActivationPolicyRegular];
+    }
 }

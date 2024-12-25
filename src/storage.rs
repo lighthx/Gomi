@@ -6,14 +6,14 @@ pub struct Storage {
     connection: Arc<Mutex<Connection>>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BrowserInfo {
     pub name: String,
     pub path: String,
     pub icon_data: Vec<u8>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MatchItem {
     pub browser_path: String,
     pub profile: Option<String>,
@@ -21,7 +21,7 @@ pub struct MatchItem {
     pub match_value: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BrowserProfile {
     pub browser_path: String,
     pub profile: String,
@@ -182,6 +182,21 @@ impl Storage {
         connection
             .execute("DELETE FROM matches WHERE match_value = ?", (match_value,))
             .unwrap();
+    }
+    pub fn find_all_match_items(&self) -> Vec<MatchItem> {
+        let connection = self.connection.lock().unwrap();
+        let mut stmt = connection.prepare("SELECT * FROM matches").unwrap();
+        stmt.query_map([], |row| {
+            Ok(MatchItem {
+                browser_path: row.get(0)?,
+                profile: row.get(1)?,
+                match_type: row.get(2)?,
+                match_value: row.get(3)?,
+            })
+        })
+        .unwrap()
+        .map(|r| r.unwrap())
+        .collect()
     }
 }
 

@@ -1,46 +1,62 @@
-mod components;
 mod config;
 mod icons;
+mod message;
+mod pages;
 mod platform_tools;
 mod storage;
-use components::footer::footer;
-use components::icon_button::{icon_button, ICON};
-use components::list_item::list_item;
-use components::scroll_view::scroll_view;
-use config::{LOG_DIR, LOG_FILE, WINDOW_HEIGHT, WINDOW_WIDTH};
-use iced::keyboard::Modifiers;
-use iced::widget::{text_editor, text_input};
-use iced::window::Position;
-use iced::{event, keyboard, Alignment, Event, Font, Padding, Subscription};
-use iced::{
-    widget::{button, center, container, image, row, text, Column, Text},
-    window, Background, Border, Color, Element, Length, Shadow, Size, Task, Theme,
+mod subscriptions;
+
+use config::{
+    LOG_DIR, LOG_FILE, MENU_WINDOW_HEIGHT, MENU_WINDOW_WIDTH, SETTING_WINDOW_HEIGHT,
+    SETTING_WINDOW_WIDTH,
 };
-use platform_tools::open_url;
+use iced::keyboard::Modifiers;
+use iced::widget::text_editor;
+use iced::window::Position;
+use iced::{
+    event, keyboard,
+    widget::{text, Column},
+    window, Element, Event, Font, Size, Subscription, Task, Theme,
+};
+use message::{ExternalOperation, Message, WindowType};
+use pages::components::footer::footer;
 use platform_tools::{ensure_default_browser, get_mouse_position};
+use platform_tools::{open_url, show_app};
 use std::mem;
 use std::time::{Duration, Instant};
 use storage::{BrowserInfo, BrowserProfile, MatchItem, Storage};
-use tracing::{info, warn};
+use subscriptions::tray_menu_event_subscription;
 use tracing_subscriber::fmt::format::FmtSpan;
-// use tray_icon::menu::{Menu, MenuItem};
-// use tray_icon::{TrayIcon, TrayIconBuilder, TrayIconEvent};
+use tray_icon::menu::{Menu, MenuItem};
+use tray_icon::{TrayIcon, TrayIconBuilder};
+
+const IS_DEBUG: bool = cfg!(debug_assertions);
+
+struct MenuWindow {
+    is_default_browser: bool,
+    current_page: MenuWindowPage,
+    current_url: Option<String>,
+    browser_list: Vec<BrowserInfo>,
+    launch_time: Instant,
+    stacks: Vec<MenuWindowPage>,
+    window_id: window::Id,
+}
+
+struct SettingWindow {
+    launch_time: Instant,
+    match_items: Vec<MatchItem>,
+    window_id: window::Id,
+}
 
 struct Gomi {
-    // tray: TrayIcon,
-    is_default_browser: bool,
-    current_url: Option<String>,
-    browser_list: Option<Vec<BrowserInfo>>,
-    current_page: Page,
+    _tray: TrayIcon,
     storage: Storage,
     keyboard: Modifiers,
-    launch_time: Instant,
-    stacks: Vec<Page>,
-    current_menu_window: Option<window::Id>,
-    current_setting_window: Option<window::Id>,
+    menu_window: Option<MenuWindow>,
+    setting_window: Option<SettingWindow>,
 }
 #[derive(Debug)]
-enum Page {
+enum MenuWindowPage {
     Home,
     ProfileSelector {
         browser: BrowserInfo,
@@ -54,157 +70,110 @@ enum Page {
     },
 }
 
-#[derive(Debug, Clone)]
-enum ExternalOperation {
-    SaveEqual,
-    SaveContain,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum WindowType {
-    Menu,
-    Setting,
-}
-
-#[derive(Debug, Clone)]
-enum Message {
-    GoHome(Vec<BrowserInfo>),
-    LaunchBrowser(String, Option<String>, Option<ExternalOperation>),
-    SetAsDefault,
-    ReceiveUrl(String),
-    CheckDefaultStatus,
-    ListProfiles(BrowserInfo),
-    DeleteProfile(String),
-    Back,
-    AddProfile,
-    TypeProfileText(String),
-    ShowMatchContainEditor(String, Option<String>),
-    TypeMatchContainText(text_editor::Action),
-    KeyboardModifiersChanged(Modifiers),
-    OpenWindow(WindowType),
-    WindowOpened(WindowType, window::Id),
-    CloseWindow(WindowType),
-    MoveWindow(window::Id),
-    WindowClosed(window::Id),
-    WindowUnfocused(window::Id),
-    RefreshApplication,
-    None,
-}
-
 impl Gomi {
     fn new() -> (Self, Task<Message>) {
         let storage = Storage::new();
-        // let tray = TrayIconBuilder::new()
-        //     .with_menu(Box::new(
-        //         Menu::with_items(&[&MenuItem::new("rule settings", true, None)]).unwrap(),
-        //     ))
-        //     .with_tooltip("Gomi")
-        //     .with_title("Gomi")
-        //     .build()
-        //     .unwrap();
-        // unsafe {
-        //     use core_foundation::runloop::{CFRunLoopGetMain, CFRunLoopWakeUp};
-
-        //     let rl = CFRunLoopGetMain();
-        //     CFRunLoopWakeUp(rl);
-        // }
+        if IS_DEBUG {
+            show_app();
+        }
+        let tray = TrayIconBuilder::new()
+            .with_menu(Box::new(
+                Menu::with_items(&[
+                    &MenuItem::new("rule settings", true, None),
+                    &MenuItem::new("Quit", true, None),
+                ])
+                .unwrap(),
+            ))
+            .with_tooltip("Gomi")
+            .with_title("Gomi")
+            .build()
+            .unwrap();
+        unsafe {
+            use core_foundation::runloop::{CFRunLoopGetMain, CFRunLoopWakeUp};
+            let rl = CFRunLoopGetMain();
+            CFRunLoopWakeUp(rl);
+        }
 
         (
             Self {
-                browser_list: None,
-                current_url: None,
-                is_default_browser: cfg!(debug_assertions)
-                    || platform_tools::ensure_default_browser(),
-                current_page: Page::Home,
                 storage,
                 keyboard: Modifiers::default(),
-                launch_time: Instant::now(),
-                stacks: vec![],
-                current_menu_window: None,
-                current_setting_window: None,
-                // tray:None,
+                menu_window: None,
+                setting_window: None,
+                _tray: tray,
             },
-            Task::perform(
-                async move {
-                    info!("Gomi");
-                    let mut storage = Storage::new();
-                    let mut browsers = storage.get_browsers();
-                    if browsers.is_empty() {
-                        let handlers = platform_tools::get_url_handlers().await;
-                        storage.batch_insert_browsers(handlers.clone());
-                        browsers = handlers;
-                    }
-                    browsers
-                },
-                Message::GoHome,
-            ),
+            if ensure_default_browser() {
+                Task::done(Message::OpenWindow(WindowType::Menu))
+            } else {
+                Task::none()
+            },
         )
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
-        info!("message: {:?}", message);
+        println!("update: {:?}", message);
         match message {
-            Message::GoHome(browsers) => {
-                self.browser_list = Some(browsers);
-                if !ensure_default_browser() {
-                    return Task::done(Message::OpenWindow(WindowType::Menu));
-                }
-                Task::none()
-            }
             Message::LaunchBrowser(path, profile, external_operation) => {
-                if let Some(url) = self.current_url.clone() {
-                    open_url(url.clone(), path.clone(), profile.clone());
-                    if let Some(external_operation) = external_operation {
-                        match external_operation {
-                            ExternalOperation::SaveEqual => {
-                                self.storage.insert_match(MatchItem {
-                                    browser_path: path.clone(),
-                                    profile: profile.clone(),
-                                    match_type: "Equal".to_string(),
-                                    match_value: url.clone(),
-                                });
-                            }
-                            ExternalOperation::SaveContain => {
-                                if let Page::MatchContainEditor {
-                                    match_container_text,
-                                    ..
-                                } = &self.current_page
-                                {
+                if let Some(menu_window) = &self.menu_window {
+                    if let Some(url) = menu_window.current_url.clone() {
+                        open_url(url.clone(), path.clone(), profile.clone());
+                        if let Some(external_operation) = external_operation {
+                            match external_operation {
+                                ExternalOperation::SaveEqual => {
                                     self.storage.insert_match(MatchItem {
                                         browser_path: path.clone(),
                                         profile: profile.clone(),
-                                        match_type: "Contain".to_string(),
-                                        match_value: match_container_text.text().trim().to_string(),
+                                        match_type: "Equal".to_string(),
+                                        match_value: url.clone(),
                                     });
+                                }
+                                ExternalOperation::SaveContain => {
+                                    if let MenuWindowPage::MatchContainEditor {
+                                        match_container_text,
+                                        ..
+                                    } = &menu_window.current_page
+                                    {
+                                        self.storage.insert_match(MatchItem {
+                                            browser_path: path.clone(),
+                                            profile: profile.clone(),
+                                            match_type: "Contain".to_string(),
+                                            match_value: match_container_text
+                                                .text()
+                                                .trim()
+                                                .to_string(),
+                                        });
+                                    }
                                 }
                             }
                         }
+                        return Task::done(Message::CloseWindow(WindowType::Menu));
                     }
-                    return Task::done(Message::CloseWindow(WindowType::Menu));
                 }
                 Task::none()
             }
 
             Message::ReceiveUrl(url) => {
-                self.current_url = Some(url.clone());
-                let equal_matched = self.storage.find_equal_matches_by_url(url.clone());
-                if let Some(match_item) = equal_matched {
-                    return Task::done(Message::LaunchBrowser(
-                        match_item.browser_path,
-                        match_item.profile,
-                        None,
-                    ));
-                }
-                let contain_matched = self.storage.find_contain_matches_by_url(url.clone());
-                if let Some(match_item) = contain_matched {
-                    return Task::done(Message::LaunchBrowser(
-                        match_item.browser_path,
-                        match_item.profile,
-                        None,
-                    ));
-                }
-                if let Some(window_id) = self.current_menu_window {
-                    return Task::done(Message::MoveWindow(window_id));
+                if let Some(menu_window) = &mut self.menu_window {
+                    menu_window.current_url = Some(url.clone());
+                    let equal_matched = self.storage.find_equal_matches_by_url(url.clone());
+                    if let Some(match_item) = equal_matched {
+                        return Task::done(Message::LaunchBrowser(
+                            match_item.browser_path,
+                            match_item.profile,
+                            None,
+                        ));
+                    }
+                    let contain_matched = self.storage.find_contain_matches_by_url(url.clone());
+                    if let Some(match_item) = contain_matched {
+                        return Task::done(Message::LaunchBrowser(
+                            match_item.browser_path,
+                            match_item.profile,
+                            None,
+                        ));
+                    }
+                    if let Some(MenuWindow { window_id, .. }) = self.menu_window {
+                        return Task::done(Message::MoveWindow(window_id));
+                    }
                 }
                 Task::done(Message::OpenWindow(WindowType::Menu))
             }
@@ -214,103 +183,123 @@ impl Gomi {
                 Task::none()
             }
             Message::CheckDefaultStatus => {
-                if !self.is_default_browser {
-                    let is_default_browser = platform_tools::ensure_default_browser();
-                    self.is_default_browser = is_default_browser;
-                    if is_default_browser {
-                        return Task::done(Message::CloseWindow(WindowType::Menu));
+                if let Some(menu_window) = &mut self.menu_window {
+                    if !menu_window.is_default_browser {
+                        let is_default_browser = platform_tools::ensure_default_browser();
+                        menu_window.is_default_browser = is_default_browser;
+                        if is_default_browser {
+                            return Task::done(Message::CloseWindow(WindowType::Menu));
+                        }
                     }
                 }
                 Task::none()
             }
             Message::ListProfiles(browser) => {
-                let profiles = self.storage.get_browser_profiles(browser.path.clone());
-                let new_page = Page::ProfileSelector {
-                    profiles,
-                    browser,
-                    profile_text: String::new(),
-                };
-                self.stacks
-                    .push(mem::replace(&mut self.current_page, new_page));
+                if let Some(menu_window) = &mut self.menu_window {
+                    let profiles = self.storage.get_browser_profiles(browser.path.clone());
+                    let new_page = MenuWindowPage::ProfileSelector {
+                        profiles,
+                        browser,
+                        profile_text: String::new(),
+                    };
+                    menu_window
+                        .stacks
+                        .push(mem::replace(&mut menu_window.current_page, new_page));
+                }
                 Task::none()
             }
             Message::DeleteProfile(profile_name) => {
-                if let Page::ProfileSelector {
-                    browser,
-                    profile_text: text,
-                    ..
-                } = &self.current_page
-                {
-                    self.storage
-                        .delete_browser_profile(browser.path.clone(), profile_name.clone());
-                    self.storage.delete_match_by_profile_and_browser_path(
-                        browser.path.clone(),
-                        profile_name.clone(),
-                    );
-                    let profiles = self.storage.get_browser_profiles(browser.path.clone());
-                    self.current_page = Page::ProfileSelector {
-                        profiles,
-                        browser: browser.clone(),
-                        profile_text: text.clone(),
-                    };
+                if let Some(menu_window) = &mut self.menu_window {
+                    if let MenuWindowPage::ProfileSelector {
+                        browser,
+                        profile_text: text,
+                        ..
+                    } = &menu_window.current_page
+                    {
+                        self.storage
+                            .delete_browser_profile(browser.path.clone(), profile_name.clone());
+                        self.storage.delete_match_by_profile_and_browser_path(
+                            browser.path.clone(),
+                            profile_name.clone(),
+                        );
+                        let profiles = self.storage.get_browser_profiles(browser.path.clone());
+                        menu_window.current_page = MenuWindowPage::ProfileSelector {
+                            profiles,
+                            browser: browser.clone(),
+                            profile_text: text.clone(),
+                        };
+                    }
                 }
                 Task::none()
             }
             Message::Back => {
-                if let Some(page) = self.stacks.pop() {
-                    self.current_page = page;
+                if let Some(menu_window) = &mut self.menu_window {
+                    if let Some(page) = menu_window.stacks.pop() {
+                        menu_window.current_page = page;
+                    }
                 }
                 Task::none()
             }
             Message::AddProfile => {
-                if let Page::ProfileSelector {
-                    browser,
-                    profile_text,
-                    ..
-                } = &self.current_page
-                {
-                    if profile_text.is_empty() {
-                        return Task::none();
+                if let Some(menu_window) = &mut self.menu_window {
+                    if let MenuWindowPage::ProfileSelector {
+                        browser,
+                        profile_text,
+                        ..
+                    } = &menu_window.current_page
+                    {
+                        if profile_text.is_empty() {
+                            return Task::none();
+                        }
+                        self.storage.insert_browser_profile(BrowserProfile {
+                            browser_path: browser.path.clone(),
+                            profile: profile_text.clone(),
+                            description: None,
+                        });
+                        let profiles = self.storage.get_browser_profiles(browser.path.clone());
+                        menu_window.current_page = MenuWindowPage::ProfileSelector {
+                            profiles,
+                            browser: browser.clone(),
+                            profile_text: String::new(),
+                        };
                     }
-                    self.storage.insert_browser_profile(BrowserProfile {
-                        browser_path: browser.path.clone(),
-                        profile: profile_text.clone(),
-                        description: None,
-                    });
-                    let profiles = self.storage.get_browser_profiles(browser.path.clone());
-                    self.current_page = Page::ProfileSelector {
-                        profiles,
-                        browser: browser.clone(),
-                        profile_text: String::new(),
-                    };
                 }
                 Task::none()
             }
             Message::TypeProfileText(text) => {
-                if let Page::ProfileSelector { profile_text, .. } = &mut self.current_page {
-                    *profile_text = text;
+                if let Some(menu_window) = &mut self.menu_window {
+                    if let MenuWindowPage::ProfileSelector { profile_text, .. } =
+                        &mut menu_window.current_page
+                    {
+                        *profile_text = text;
+                    }
                 }
                 Task::none()
             }
             Message::ShowMatchContainEditor(browser_path, profile) => {
-                if let Some(url) = self.current_url.clone() {
-                    let new_page = Page::MatchContainEditor {
-                        match_container_text: text_editor::Content::with_text(&url),
-                        browser_path,
-                        profile,
-                    };
-                    self.stacks
-                        .push(mem::replace(&mut self.current_page, new_page));
+                if let Some(menu_window) = &mut self.menu_window {
+                    if let Some(url) = menu_window.current_url.clone() {
+                        let new_page = MenuWindowPage::MatchContainEditor {
+                            match_container_text: text_editor::Content::with_text(&url),
+                            browser_path,
+                            profile,
+                        };
+                        menu_window
+                            .stacks
+                            .push(mem::replace(&mut menu_window.current_page, new_page));
+                    }
                 }
                 Task::none()
             }
             Message::TypeMatchContainText(action) => {
-                if let Page::MatchContainEditor {
-                    match_container_text,
-                    ..
-                } = &mut self.current_page
-                {
-                    match_container_text.perform(action);
+                if let Some(menu_window) = &mut self.menu_window {
+                    if let MenuWindowPage::MatchContainEditor {
+                        match_container_text,
+                        ..
+                    } = &mut menu_window.current_page
+                    {
+                        match_container_text.perform(action);
+                    }
                 }
                 Task::none()
             }
@@ -319,38 +308,61 @@ impl Gomi {
                 Task::none()
             }
             Message::OpenWindow(window_type) => {
-                if self.current_menu_window.is_some() && window_type == WindowType::Menu {
+                if self.menu_window.is_some() && window_type == WindowType::Menu {
                     return Task::none();
                 }
-                if self.current_setting_window.is_some() && window_type == WindowType::Setting {
+                if self.setting_window.is_some() && window_type == WindowType::Setting {
                     return Task::none();
                 }
                 let position = get_mouse_position();
-                let (_, open) = window::open(window::Settings {
-                    position: Position::Specific(position),
-                    size: Size::new(WINDOW_WIDTH, WINDOW_HEIGHT),
-                    ..Default::default()
-                });
-                open.map(move |window_id| Message::WindowOpened(window_type, window_id))
-            }
-            Message::WindowOpened(window_type, window_id) => {
-                match window_type {
-                    WindowType::Menu => self.current_menu_window = Some(window_id),
-                    WindowType::Setting => self.current_setting_window = Some(window_id),
-                }
-                self.launch_time = Instant::now();
-                Task::none()
+                let open = if window_type == WindowType::Menu {
+                    let (id, open) = window::open(window::Settings {
+                        position: Position::Specific(position),
+                        size: Size::new(MENU_WINDOW_WIDTH, MENU_WINDOW_HEIGHT),
+                        ..Default::default()
+                    });
+                    let mut browser_list = self.storage.get_browsers();
+                    if browser_list.is_empty() {
+                        let handlers = platform_tools::get_url_handlers();
+                        self.storage.batch_insert_browsers(handlers.clone());
+                        browser_list = handlers;
+                    }
+                    self.menu_window = Some(MenuWindow {
+                        is_default_browser: IS_DEBUG || platform_tools::ensure_default_browser(),
+                        current_page: MenuWindowPage::Home,
+                        current_url: None,
+                        browser_list: browser_list,
+                        launch_time: Instant::now(),
+                        stacks: vec![],
+                        window_id: id,
+                    });
+                    open
+                } else {
+                    let (id, open) = window::open(window::Settings {
+                        position: Position::Centered,
+                        size: Size::new(SETTING_WINDOW_WIDTH, SETTING_WINDOW_HEIGHT),
+                        ..Default::default()
+                    });
+                    let match_items = self.storage.find_all_match_items();
+                    self.setting_window = Some(SettingWindow {
+                        launch_time: Instant::now(),
+                        match_items,
+                        window_id: id,
+                    });
+                    open
+                };
+                open.then(|_| Task::none())
             }
             Message::CloseWindow(window_type) => match window_type {
                 WindowType::Menu => {
-                    if let Some(window_id) = self.current_menu_window {
+                    if let Some(MenuWindow { window_id, .. }) = self.menu_window {
                         return window::close(window_id);
                     } else {
                         return Task::none();
                     }
                 }
                 WindowType::Setting => {
-                    if let Some(window_id) = self.current_setting_window {
+                    if let Some(SettingWindow { window_id, .. }) = self.setting_window {
                         return window::close(window_id);
                     } else {
                         return Task::none();
@@ -358,26 +370,38 @@ impl Gomi {
                 }
             },
             Message::WindowClosed(window) => {
-                if let Some(window_id) = self.current_menu_window {
+                if let Some(MenuWindow { window_id, .. }) = self.menu_window {
                     if window == window_id {
-                        self.current_page = Page::Home;
-                        self.stacks.clear();
-                        self.current_url = None;
-                        self.current_menu_window = None;
+                        self.menu_window = None;
+                    }
+                }
+                if let Some(SettingWindow { window_id, .. }) = self.setting_window {
+                    if window == window_id {
+                        self.setting_window = None;
                     }
                 }
                 Task::none()
             }
             Message::WindowUnfocused(window) => {
-                if let Some(window_id) = self.current_menu_window {
-                    if self.launch_time.elapsed().as_secs() > 2 && window_id == window {
+                if let Some(MenuWindow {
+                    window_id,
+                    launch_time,
+                    ..
+                }) = self.menu_window
+                {
+                    if launch_time.elapsed().as_secs() > 2 && window_id == window {
                         return Task::done(Message::CloseWindow(WindowType::Menu));
                     } else {
                         return Task::none();
                     }
                 }
-                if let Some(window_id) = self.current_setting_window {
-                    if self.launch_time.elapsed().as_secs() > 2 && window_id == window {
+                if let Some(SettingWindow {
+                    window_id,
+                    launch_time,
+                    ..
+                }) = self.setting_window
+                {
+                    if launch_time.elapsed().as_secs() > 2 && window_id == window {
                         return Task::done(Message::CloseWindow(WindowType::Setting));
                     } else {
                         return Task::none();
@@ -386,237 +410,117 @@ impl Gomi {
                 Task::none()
             }
 
-            Message::RefreshApplication => {
-                let mut storage = self.storage.clone();
-                Task::perform(
-                    async move {
-                        storage.delete_all_browsers();
-                        let browsers = platform_tools::get_url_handlers().await;
-                        storage.batch_insert_browsers(browsers.clone());
-                        browsers
-                    },
-                    Message::GoHome,
-                )
+            Message::RefreshBrowserList => {
+                self.storage.delete_all_browsers();
+                let browsers = platform_tools::get_url_handlers();
+                self.storage.batch_insert_browsers(browsers.clone());
+                if let Some(menu_window) = &mut self.menu_window {
+                    menu_window.browser_list = browsers;
+                }
+                Task::none()
             }
-            Message::None => Task::none(),
+            Message::CloseApplication => iced::exit(),
         }
     }
 
-    fn view(&self, _: window::Id) -> Element<Message> {
-        let content = match &self.current_page {
-            Page::Home => {
-                let browsers = self.browser_list.clone().unwrap_or_default();
-                let is_default_browser = self.is_default_browser;
-                if !is_default_browser {
-                    container(center(
-                        Column::new()
-                            .push(
-                                Text::new("Set as your default browser")
-                                    .size(14)
-                                    .style(|_| text::Style {
-                                        color: Some(Color::from_rgb(0.4, 0.4, 0.4)),
-                                    }),
-                            )
-                            .push(
-                                button(Text::new("Set Default").size(14).style(|_| text::Style {
-                                    color: Some(Color::from_rgb(1.0, 1.0, 1.0)),
-                                }))
-                                .style(|_, _| button::Style {
-                                    background: Some(Background::Color(Color::from_rgb(
-                                        0.2, 0.5, 1.0,
-                                    ))),
-                                    border: Border {
-                                        radius: 4.0.into(),
-                                        width: 0.0,
-                                        color: Color::TRANSPARENT,
-                                    },
-                                    shadow: Shadow {
-                                        color: Color::from_rgb(0.8, 0.8, 0.8),
-                                        offset: iced::Vector::new(0.0, 1.0),
-                                        blur_radius: 2.0,
-                                    },
-                                    ..button::Style::default()
-                                })
-                                .padding([6, 16])
-                                .on_press(Message::SetAsDefault),
-                            )
-                            .spacing(12)
-                            .align_x(iced::Alignment::Center),
-                    ))
-                    .width(Length::Fill)
-                    .height(Length::Fill)
-                    .padding(20)
-                    .style(|_| container::Style {
-                        background: Some(Background::Color(Color::from_rgb(0.98, 0.98, 0.98))),
-                        ..Default::default()
-                    })
-                } else {
-                    let mut content = Column::new().spacing(8).padding(12).width(Length::Fill);
-
-                    content = content.push(
-                        container(Text::new(""))
-                            .width(Length::Fill)
-                            .height(1)
-                            .style(|_| container::Style {
-                                background: Some(Background::Color(Color::from_rgb(0.9, 0.9, 0.9))),
-                                ..Default::default()
-                            }),
-                    );
-
-                    for browser in browsers {
-                        let name = browser.name.to_string();
-                        let path = browser.path.clone();
-                        let icon =
-                            image::viewer(image::Handle::from_bytes(browser.icon_data.clone()))
-                                .width(Length::Fixed(16.0))
-                                .height(Length::Fixed(16.0));
-
-                        content = content.push(list_item(
-                            Some(icon),
-                            name,
-                            if self.keyboard.shift() {
-                                Message::ShowMatchContainEditor(browser.path.clone(), None)
-                            } else {
-                                Message::LaunchBrowser(
-                                    path,
-                                    None,
-                                    if self.keyboard.logo() {
-                                        Some(ExternalOperation::SaveEqual)
-                                    } else {
-                                        None
-                                    },
-                                )
-                            },
-                            ICON::Profile,
-                            Message::ListProfiles(browser.clone()),
-                            "List profiles".to_string(),
-                        ));
-                    }
-
-                    container(
-                        Column::new().push(
-                            container(scroll_view(content))
-                                .style(|_| container::Style {
-                                    background: Some(Background::Color(Color::from_rgb(
-                                        0.98, 0.98, 0.98,
-                                    ))),
-                                    ..Default::default()
-                                })
-                                .padding(2)
-                                .width(Length::Fill)
-                                .height(Length::Fill),
-                        ),
-                    )
-                    .width(Length::Fill)
-                    .height(Length::Fill)
-                }
-            }
-            Page::ProfileSelector {
-                profiles,
-                browser,
-                profile_text,
-            } => {
-                let mut content = Column::new()
-                    .padding(Padding::new(12.0))
-                    .width(Length::Fill)
-                    .height(Length::Fill);
-
-                let profile_list =
-                    profiles
-                        .iter()
-                        .fold(Column::new().spacing(5), |column, profile| {
-                            let profile_row = list_item(
-                                None,
-                                profile.profile.clone(),
-                                if self.keyboard.shift() {
-                                    Message::ShowMatchContainEditor(
-                                        browser.path.clone(),
-                                        Some(profile.profile.clone()),
-                                    )
+    fn view(&self, window_id: window::Id) -> Element<Message> {
+        println!("view window: {:?}", window_id);
+        if self.menu_window.is_some() && self.menu_window.as_ref().unwrap().window_id == window_id {
+            let MenuWindow {
+                browser_list,
+                is_default_browser,
+                current_page,
+                current_url,
+                ..
+            } = self.menu_window.as_ref().unwrap();
+            let content = match current_page {
+                MenuWindowPage::Home => {
+                    let is_default_browser = is_default_browser;
+                    if !is_default_browser {
+                        pages::set_default_browser::set_default_browser(Message::SetAsDefault)
+                    } else {
+                        let shift_key_pressed = self.keyboard.shift();
+                        let logo_key_pressed = self.keyboard.logo();
+                        pages::select_browser::select_browser(
+                            browser_list,
+                            |path| {
+                                if shift_key_pressed {
+                                    Message::ShowMatchContainEditor(path.clone(), None)
                                 } else {
                                     Message::LaunchBrowser(
-                                        browser.path.clone(),
-                                        Some(profile.profile.clone()),
-                                        if self.keyboard.logo() {
+                                        path,
+                                        None,
+                                        if logo_key_pressed {
                                             Some(ExternalOperation::SaveEqual)
                                         } else {
                                             None
                                         },
                                     )
-                                },
-                                ICON::Remove,
-                                Message::DeleteProfile(profile.profile.clone()),
-                                "Delete profile".to_string(),
-                            );
-                            column.push(profile_row)
-                        });
-                content = content.push(
-                    container(scroll_view(profile_list))
-                        .height(Length::Fill)
-                        .width(Length::Fill),
-                );
-
-                let input_row = row![
-                    icon_button(ICON::Back, Message::Back, "Back to home page".to_string()),
-                    text_input("New Profile", &profile_text)
-                        .on_input(Message::TypeProfileText)
-                        .on_submit(Message::AddProfile)
-                        .width(Length::Fill),
-                    icon_button(ICON::Add, Message::AddProfile, "Add profile".to_string())
-                ]
-                .spacing(12)
-                .align_y(Alignment::Center)
-                .height(30.0);
-
-                content = content.push(input_row);
-
-                container(content)
-                    .width(Length::Fill)
-                    .height(Length::Fill)
-                    .center_x(Length::Fill)
-            }
-            Page::MatchContainEditor {
-                match_container_text,
-                browser_path,
-                profile,
-            } => {
-                let mut content = Column::new()
-                    .spacing(20)
-                    .padding(20)
-                    .width(Length::Fill)
-                    .height(Length::Fill);
-                let footer = row![
-                    icon_button(
-                        ICON::Back,
+                                }
+                            },
+                            |browser| Message::ListProfiles(browser),
+                        )
+                    }
+                }
+                MenuWindowPage::ProfileSelector {
+                    profiles,
+                    browser,
+                    profile_text,
+                } => {
+                    let shift_key_pressed = self.keyboard.shift();
+                    let logo_key_pressed = self.keyboard.logo();
+                    let path = browser.path.clone();
+                    pages::select_profile::select_profile(
+                        profiles,
+                        |profile| {
+                            if shift_key_pressed {
+                                Message::ShowMatchContainEditor(path.clone(), Some(profile.clone()))
+                            } else {
+                                Message::LaunchBrowser(
+                                    path.clone(),
+                                    Some(profile.clone()),
+                                    if logo_key_pressed {
+                                        Some(ExternalOperation::SaveEqual)
+                                    } else {
+                                        None
+                                    },
+                                )
+                            }
+                        },
+                        |profile| Message::DeleteProfile(profile),
                         Message::Back,
-                        "Back to previous page".to_string()
-                    ),
-                    button(Text::new("Save And Open").size(14).style(|_| text::Style {
-                        color: Some(Color::from_rgb(1.0, 1.0, 1.0)),
-                    }))
-                    .style(|_, _| button::Style {
-                        background: Some(Background::Color(Color::from_rgb(0.2, 0.5, 1.0))),
-                        ..Default::default()
-                    })
-                    .padding([6, 16])
-                    .on_press(Message::LaunchBrowser(
+                        |text| Message::TypeProfileText(text),
+                        Message::AddProfile,
+                        profile_text,
+                    )
+                }
+                MenuWindowPage::MatchContainEditor {
+                    match_container_text,
+                    browser_path,
+                    profile,
+                } => pages::edit_match_value::edit_match_value(
+                    Message::Back,
+                    Message::LaunchBrowser(
                         browser_path.clone(),
                         profile.clone(),
                         Some(ExternalOperation::SaveContain),
-                    ))
-                ]
-                .align_y(Alignment::Center)
-                .spacing(12);
-                content = content
-                    .push(
-                        text_editor(&match_container_text).on_action(Message::TypeMatchContainText),
-                    )
-                    .push(footer);
-                container(content)
-            }
-        };
-        let footer = footer(self.current_url.clone(), Message::RefreshApplication);
-        Column::new().push(content).push(footer).into()
+                    ),
+                    Message::TypeMatchContainText,
+                    match_container_text,
+                ),
+            };
+            let footer = footer(current_url.clone(), Message::RefreshBrowserList);
+            Column::new().push(content).push(footer).into()
+        } else if self.setting_window.is_some()
+            && window_id == self.setting_window.as_ref().unwrap().window_id
+        {
+            let w = self.setting_window.as_ref().unwrap();
+            let a = w.match_items;
+            let content = Column::new().push(text("Setting"));
+            Column::new().push(content).into()
+        } else {
+            Column::new().push(text("No window")).into()
+        }
     }
 
     fn theme(&self, _: window::Id) -> Theme {
@@ -626,34 +530,28 @@ impl Gomi {
     fn subscription(&self) -> Subscription<Message> {
         Subscription::batch([
             event::listen_url().map(Message::ReceiveUrl),
-            iced::time::every(Duration::from_secs(1)).map(|_| Message::CheckDefaultStatus),
+            if IS_DEBUG {
+                Subscription::none()
+            } else {
+                iced::time::every(Duration::from_secs(1)).map(|_| Message::CheckDefaultStatus)
+            },
             event::listen_with(|event, _status, window| -> Option<Message> {
                 match event {
                     Event::Keyboard(keyboard::Event::ModifiersChanged(modifiers)) => {
                         Some(Message::KeyboardModifiersChanged(modifiers))
                     }
                     Event::Window(window::Event::Unfocused) => {
-                        Some(Message::WindowUnfocused(window))
+                        if IS_DEBUG {
+                            None
+                        } else {
+                            Some(Message::WindowUnfocused(window))
+                        }
                     }
                     Event::Window(window::Event::Closed) => Some(Message::WindowClosed(window)),
                     _ => None,
                 }
             }),
-            // iced::time::every(Duration::from_secs(1)).map(|_| {
-            //     info!("11111");
-            //     let event = TrayIconEvent::receiver().try_recv();
-            //     if let Ok(event) = event {
-            //         match event {
-            //             TrayIconEvent::Click { id, .. } => {
-            //                 info!("tray icon clicked: {:?}", id);
-            //                 Message::None
-            //             }
-            //             _ => Message::None,
-            //         }
-            //     } else {
-            //         Message::None
-            //     }
-            // }),
+            Subscription::run(tray_menu_event_subscription),
         ])
     }
 }
@@ -665,7 +563,6 @@ fn main() -> iced::Result {
         .with_writer(non_blocking)
         .with_span_events(FmtSpan::CLOSE)
         .init();
-    warn!("aaa");
     iced::daemon("Gomi", Gomi::update, Gomi::view)
         .font(include_bytes!("../fonts/Microns.ttf").as_slice())
         .default_font(Font::MONOSPACE)

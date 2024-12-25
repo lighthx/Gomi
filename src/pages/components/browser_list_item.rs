@@ -9,7 +9,7 @@ use iced::{
 
 use super::icon_button::{icon_button, ICON};
 
-pub fn list_item<'a, Message: 'a + Clone>(
+pub fn browser_list_item<'a, Message: 'a + Clone>(
     start_icon: Option<Viewer<image::Handle>>,
     name: String,
     on_press: Message,
