@@ -1,11 +1,11 @@
 [package]
 name = "Gomi"
-version = "0.3.1"
+version = "0.4.0"
 edition = "2021"
 
 [dependencies]
 cocoa = "0.26.0"
-iced = {git = "https://github.com/lighthx/iced.git", features = ["tokio","image"],rev = "63860c6327d056b6a91a1e1264cf1731ba673282"}
+iced = {git = "https://github.com/lighthx/iced.git", features = ["tokio","image"],rev = "192f243ea4ebe347a7ae4b215257a840325def1b"}
 core-foundation = "0.9.3"
 core-graphics = "0.23.1"
 objc = "0.2.7"
@@ -17,6 +17,7 @@ tracing = "0.1.41"
 tracing-subscriber = "0.3.19"
 tracing-appender = "0.2.3"
 url = "2.5.4"
+tray-icon = "0.19.2"
 
 [package.metadata.bundle]
 name = "Gomi"

@@ -74,6 +74,6 @@ MIT
 - [ ] Improve the ugly UI
 - [x] Hide the app icon in the dock
 - [ ] Prevent the app move out of the screen
-
+- [x] Add tray menu for rule management and set default browser
 ## Contributing
 Contributions are welcome! Please feel free to submit a Pull Request.
