@@ -279,6 +279,7 @@ pub fn open_url(url: String, browser_path: String, profile: Option<String>) {
     }
 }
 
+
 #[link(name = "CoreServices", kind = "framework")]
 extern "C" {
     fn LSSetDefaultHandlerForURLScheme(scheme: CFStringRef, bundle_id: CFStringRef) -> i32;

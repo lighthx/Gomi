@@ -9,13 +9,13 @@ pub fn tray_menu_event_subscription() -> impl Stream<Item = Message> {
         loop {
             tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
             let event = MenuEvent::receiver().recv().unwrap();
-            if event.id == "2" {
-                output.try_send(Message::CloseApplication).unwrap();
-            }
-            if event.id == "1" {
-                output
+            match event.id.0.as_str() {
+                "3" => output.try_send(Message::CloseApplication).unwrap(),
+                "2" => output.try_send(Message::SetAsDefault).unwrap(),
+                "1" => output
                     .try_send(Message::OpenWindow(WindowType::Setting))
-                    .unwrap();
+                    .unwrap(),
+                _ => (),
             }
         }
     })

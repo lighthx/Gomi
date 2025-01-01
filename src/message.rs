@@ -21,6 +21,7 @@ pub enum Message {
     MoveWindow(window::Id),
     WindowClosed(window::Id),
     WindowUnfocused(window::Id),
+    DeleteMatchItem(String),
     RefreshBrowserList,
     CloseApplication,
 }

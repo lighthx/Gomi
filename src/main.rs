@@ -26,6 +26,7 @@ use std::mem;
 use std::time::{Duration, Instant};
 use storage::{BrowserInfo, BrowserProfile, MatchItem, Storage};
 use subscriptions::tray_menu_event_subscription;
+use tracing::info;
 use tracing_subscriber::fmt::format::FmtSpan;
 use tray_icon::menu::{Menu, MenuItem};
 use tray_icon::{TrayIcon, TrayIconBuilder};
@@ -35,7 +36,6 @@ const IS_DEBUG: bool = cfg!(debug_assertions);
 struct MenuWindow {
     is_default_browser: bool,
     current_page: MenuWindowPage,
-    current_url: Option<String>,
     browser_list: Vec<BrowserInfo>,
     launch_time: Instant,
     stacks: Vec<MenuWindowPage>,
@@ -46,6 +46,7 @@ struct SettingWindow {
     launch_time: Instant,
     match_items: Vec<MatchItem>,
     window_id: window::Id,
+    browser_list: Vec<BrowserInfo>,
 }
 
 struct Gomi {
@@ -54,6 +55,7 @@ struct Gomi {
     keyboard: Modifiers,
     menu_window: Option<MenuWindow>,
     setting_window: Option<SettingWindow>,
+    current_url: Option<String>,
 }
 #[derive(Debug)]
 enum MenuWindowPage {
@@ -79,7 +81,8 @@ impl Gomi {
         let tray = TrayIconBuilder::new()
             .with_menu(Box::new(
                 Menu::with_items(&[
-                    &MenuItem::new("rule settings", true, None),
+                    &MenuItem::new("Rule Settings", true, None),
+                    &MenuItem::new("Set as Default Browser", true, None),
                     &MenuItem::new("Quit", true, None),
                 ])
                 .unwrap(),
@@ -100,9 +103,10 @@ impl Gomi {
                 keyboard: Modifiers::default(),
                 menu_window: None,
                 setting_window: None,
+                current_url: None,
                 _tray: tray,
             },
-            if ensure_default_browser() {
+            if !ensure_default_browser() {
                 Task::done(Message::OpenWindow(WindowType::Menu))
             } else {
                 Task::none()
@@ -111,23 +115,23 @@ impl Gomi {
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
-        println!("update: {:?}", message);
+        info!("update: {:?}", message);
         match message {
             Message::LaunchBrowser(path, profile, external_operation) => {
-                if let Some(menu_window) = &self.menu_window {
-                    if let Some(url) = menu_window.current_url.clone() {
-                        open_url(url.clone(), path.clone(), profile.clone());
-                        if let Some(external_operation) = external_operation {
-                            match external_operation {
-                                ExternalOperation::SaveEqual => {
-                                    self.storage.insert_match(MatchItem {
-                                        browser_path: path.clone(),
-                                        profile: profile.clone(),
-                                        match_type: "Equal".to_string(),
-                                        match_value: url.clone(),
-                                    });
-                                }
-                                ExternalOperation::SaveContain => {
+                if let Some(url) = self.current_url.clone() {
+                    open_url(url.clone(), path.clone(), profile.clone());
+                    if let Some(external_operation) = external_operation {
+                        match external_operation {
+                            ExternalOperation::SaveEqual => {
+                                self.storage.insert_match(MatchItem {
+                                    browser_path: path.clone(),
+                                    profile: profile.clone(),
+                                    match_type: "Equal".to_string(),
+                                    match_value: url.clone(),
+                                });
+                            }
+                            ExternalOperation::SaveContain => {
+                                if let Some(menu_window) = &self.menu_window {
                                     if let MenuWindowPage::MatchContainEditor {
                                         match_container_text,
                                         ..
@@ -146,35 +150,34 @@ impl Gomi {
                                 }
                             }
                         }
-                        return Task::done(Message::CloseWindow(WindowType::Menu));
                     }
+                    return Task::done(Message::CloseWindow(WindowType::Menu));
                 }
                 Task::none()
             }
 
             Message::ReceiveUrl(url) => {
-                if let Some(menu_window) = &mut self.menu_window {
-                    menu_window.current_url = Some(url.clone());
-                    let equal_matched = self.storage.find_equal_matches_by_url(url.clone());
-                    if let Some(match_item) = equal_matched {
-                        return Task::done(Message::LaunchBrowser(
-                            match_item.browser_path,
-                            match_item.profile,
-                            None,
-                        ));
-                    }
-                    let contain_matched = self.storage.find_contain_matches_by_url(url.clone());
-                    if let Some(match_item) = contain_matched {
-                        return Task::done(Message::LaunchBrowser(
-                            match_item.browser_path,
-                            match_item.profile,
-                            None,
-                        ));
-                    }
-                    if let Some(MenuWindow { window_id, .. }) = self.menu_window {
-                        return Task::done(Message::MoveWindow(window_id));
-                    }
+                self.current_url = Some(url.clone());
+                let equal_matched = self.storage.find_equal_matches_by_url(url.clone());
+                if let Some(match_item) = equal_matched {
+                    return Task::done(Message::LaunchBrowser(
+                        match_item.browser_path,
+                        match_item.profile,
+                        None,
+                    ));
                 }
+                let contain_matched = self.storage.find_contain_matches_by_url(url.clone());
+                if let Some(match_item) = contain_matched {
+                    return Task::done(Message::LaunchBrowser(
+                        match_item.browser_path,
+                        match_item.profile,
+                        None,
+                    ));
+                }
+                if let Some(MenuWindow { window_id, .. }) = self.menu_window {
+                    return Task::done(Message::MoveWindow(window_id));
+                }
+
                 Task::done(Message::OpenWindow(WindowType::Menu))
             }
             Message::MoveWindow(window_id) => window::move_to(window_id, get_mouse_position()),
@@ -278,7 +281,7 @@ impl Gomi {
             }
             Message::ShowMatchContainEditor(browser_path, profile) => {
                 if let Some(menu_window) = &mut self.menu_window {
-                    if let Some(url) = menu_window.current_url.clone() {
+                    if let Some(url) = self.current_url.clone() {
                         let new_page = MenuWindowPage::MatchContainEditor {
                             match_container_text: text_editor::Content::with_text(&url),
                             browser_path,
@@ -308,14 +311,19 @@ impl Gomi {
                 Task::none()
             }
             Message::OpenWindow(window_type) => {
-                if self.menu_window.is_some() && window_type == WindowType::Menu {
-                    return Task::none();
+                if let Some(MenuWindow { window_id, .. }) = &self.menu_window {
+                    if window_type == WindowType::Menu {
+                        return window::gain_focus::<Message>(*window_id);
+                    }
                 }
-                if self.setting_window.is_some() && window_type == WindowType::Setting {
-                    return Task::none();
+                if let Some(SettingWindow { window_id, .. }) = &self.setting_window {
+                    if window_type == WindowType::Setting {
+                        return window::gain_focus(*window_id);
+                    }
                 }
+
                 let position = get_mouse_position();
-                let open = if window_type == WindowType::Menu {
+                let (open, id) = if window_type == WindowType::Menu {
                     let (id, open) = window::open(window::Settings {
                         position: Position::Specific(position),
                         size: Size::new(MENU_WINDOW_WIDTH, MENU_WINDOW_HEIGHT),
@@ -330,28 +338,29 @@ impl Gomi {
                     self.menu_window = Some(MenuWindow {
                         is_default_browser: IS_DEBUG || platform_tools::ensure_default_browser(),
                         current_page: MenuWindowPage::Home,
-                        current_url: None,
                         browser_list: browser_list,
                         launch_time: Instant::now(),
                         stacks: vec![],
                         window_id: id,
                     });
-                    open
+                    (open, id)
                 } else {
                     let (id, open) = window::open(window::Settings {
-                        position: Position::Centered,
                         size: Size::new(SETTING_WINDOW_WIDTH, SETTING_WINDOW_HEIGHT),
                         ..Default::default()
                     });
                     let match_items = self.storage.find_all_match_items();
+                    let browser_list = self.storage.get_browsers();
                     self.setting_window = Some(SettingWindow {
                         launch_time: Instant::now(),
                         match_items,
+                        browser_list,
                         window_id: id,
                     });
-                    open
+                    (open, id)
                 };
-                open.then(|_| Task::none())
+                open.then(move |_| window::gain_focus::<Message>(id))
+                    .then(|_| Task::none())
             }
             Message::CloseWindow(window_type) => match window_type {
                 WindowType::Menu => {
@@ -389,7 +398,7 @@ impl Gomi {
                     ..
                 }) = self.menu_window
                 {
-                    if launch_time.elapsed().as_secs() > 2 && window_id == window {
+                    if launch_time.elapsed().as_millis() > 300 && window_id == window {
                         return Task::done(Message::CloseWindow(WindowType::Menu));
                     } else {
                         return Task::none();
@@ -401,7 +410,7 @@ impl Gomi {
                     ..
                 }) = self.setting_window
                 {
-                    if launch_time.elapsed().as_secs() > 2 && window_id == window {
+                    if launch_time.elapsed().as_millis() > 300 && window_id == window {
                         return Task::done(Message::CloseWindow(WindowType::Setting));
                     } else {
                         return Task::none();
@@ -420,17 +429,23 @@ impl Gomi {
                 Task::none()
             }
             Message::CloseApplication => iced::exit(),
+            Message::DeleteMatchItem(match_value) => {
+                self.storage
+                    .delete_match_by_match_value(match_value.clone());
+                if let Some(setting_window) = &mut self.setting_window {
+                    setting_window.match_items = self.storage.find_all_match_items();
+                }
+                Task::none()
+            }
         }
     }
 
     fn view(&self, window_id: window::Id) -> Element<Message> {
-        println!("view window: {:?}", window_id);
         if self.menu_window.is_some() && self.menu_window.as_ref().unwrap().window_id == window_id {
             let MenuWindow {
                 browser_list,
                 is_default_browser,
                 current_page,
-                current_url,
                 ..
             } = self.menu_window.as_ref().unwrap();
             let content = match current_page {
@@ -509,14 +524,18 @@ impl Gomi {
                     match_container_text,
                 ),
             };
-            let footer = footer(current_url.clone(), Message::RefreshBrowserList);
+            let footer = footer(self.current_url.clone(), Message::RefreshBrowserList);
             Column::new().push(content).push(footer).into()
         } else if self.setting_window.is_some()
             && window_id == self.setting_window.as_ref().unwrap().window_id
         {
-            let w = self.setting_window.as_ref().unwrap();
-            let a = w.match_items;
-            let content = Column::new().push(text("Setting"));
+            let match_items = self.setting_window.as_ref().unwrap().match_items.clone();
+            let browser_list = self.setting_window.as_ref().unwrap().browser_list.clone();
+            let content = pages::rule_manager::rule_manager(
+                match_items,
+                browser_list,
+                Message::DeleteMatchItem,
+            );
             Column::new().push(content).into()
         } else {
             Column::new().push(text("No window")).into()
